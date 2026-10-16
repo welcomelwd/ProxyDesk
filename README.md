@@ -2,6 +2,12 @@
 
 Windows x64 应用代理工具，为不同程序设置代理、直连或阻止规则，支持 SOCKS5、HTTP 和 HTTPS 代理。
 
+## 运行截图
+
+仪表盘展示代理启停状态、当前配置和连接概览。
+
+![ProxyDesk 仪表盘运行截图](docs/screenshots/dashboard.jpg)
+
 ## 下载与安装
 
 前往 [Releases](https://github.com/welcomelwd/ProxyDesk/releases/latest) 下载最新版本。安装版和便携版均内置运行组件，无需额外安装 .NET。
