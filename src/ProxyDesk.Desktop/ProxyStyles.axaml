@@ -1,0 +1,89 @@
+<Styles xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Style Selector="Button.proxy-toolbar">
+    <Setter Property="MinHeight" Value="24" /><Setter Property="Height" Value="24" />
+    <Setter Property="Padding" Value="9,0" /><Setter Property="FontSize" Value="12" />
+    <Setter Property="CornerRadius" Value="5" />
+    <Setter Property="Background" Value="{DynamicResource SurfaceBackground}" /><Setter Property="BorderBrush" Value="{DynamicResource SurfaceBorder}" />
+  </Style>
+  <Style Selector="Button.proxy-toolbar.primary"><Setter Property="Background" Value="#1769D2" /><Setter Property="BorderThickness" Value="0" /><Setter Property="Foreground" Value="White" /></Style>
+  <Style Selector="Button.proxy-icon">
+    <Setter Property="Background" Value="Transparent" /><Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Width" Value="28" /><Setter Property="Height" Value="28" /><Setter Property="MinHeight" Value="0" />
+    <Setter Property="Padding" Value="5" /><Setter Property="CornerRadius" Value="5" />
+  </Style>
+  <Style Selector="Button.proxy-icon:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="#1A1685FF" />
+  </Style>
+  <Style Selector="Button.proxy-icon.primary"><Setter Property="Background" Value="#1769D2" /></Style>
+  <Style Selector="Button.proxy-toolbar.proxy-icon">
+    <Setter Property="Width" Value="30" /><Setter Property="Height" Value="24" /><Setter Property="Padding" Value="7,3" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="Background" Value="{DynamicResource SurfaceBackground}" /><Setter Property="BorderThickness" Value="1" />
+  </Style>
+  <Style Selector="Button.proxy-toolbar.proxy-icon.primary"><Setter Property="Background" Value="#1769D2" /><Setter Property="BorderThickness" Value="0" /></Style>
+  <Style Selector="DataGrid.proxy-table DataGridColumnHeader">
+    <Setter Property="Height" Value="36" /><Setter Property="Padding" Value="18,8,4,8" />
+    <Setter Property="BorderThickness" Value="0,0,0,1" /><Setter Property="BorderBrush" Value="{DynamicResource TableBorder}" />
+  </Style>
+  <Style Selector="DataGrid.proxy-table DataGridCell"><Setter Property="Padding" Value="18,0" /></Style>
+  <Style Selector="TextBox.proxy-input">
+    <Setter Property="Height" Value="28" /><Setter Property="MinHeight" Value="28" />
+    <Setter Property="Padding" Value="8,3" /><Setter Property="CornerRadius" Value="6" />
+    <Setter Property="FontSize" Value="14" />
+    <Setter Property="Background" Value="{DynamicResource SurfaceBackground}" /><Setter Property="BorderBrush" Value="{DynamicResource SurfaceBorder}" />
+  </Style>
+  <Style Selector="RadioButton.proxy-segment">
+    <Setter Property="Height" Value="28" /><Setter Property="MinHeight" Value="0" /><Setter Property="Padding" Value="0" />
+    <Setter Property="HorizontalAlignment" Value="Stretch" /><Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" /><Setter Property="FontSize" Value="13" />
+    <Setter Property="Background" Value="Transparent" /><Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border x:Name="Segment" Background="{TemplateBinding Background}" CornerRadius="5" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+          <ContentPresenter Content="{TemplateBinding Content}" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+  </Style>
+  <Style Selector="RadioButton.proxy-segment:checked">
+    <Setter Property="Background" Value="{DynamicResource SurfaceBackground}" />
+    <Setter Property="BorderBrush" Value="#C5C5C9" /><Setter Property="BorderThickness" Value="1" />
+  </Style>
+  <Style Selector="RadioButton.proxy-segment:focus-visible /template/ Border#Segment"><Setter Property="BorderBrush" Value="#1685FF" /></Style>
+  <Style Selector="ToggleButton.proxy-switch">
+    <Setter Property="Width" Value="34" /><Setter Property="Height" Value="20" /><Setter Property="MinHeight" Value="0" /><Setter Property="Padding" Value="0" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border x:Name="SwitchTrack" Background="#CFCFD2" CornerRadius="10" Padding="1">
+          <Border x:Name="SwitchThumb" Width="18" Height="18" Background="White" CornerRadius="9" HorizontalAlignment="Left" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+  </Style>
+  <Style Selector="ToggleButton.proxy-switch:checked /template/ Border#SwitchTrack"><Setter Property="Background" Value="#1769D2" /></Style>
+  <Style Selector="ToggleButton.proxy-switch:checked /template/ Border#SwitchThumb"><Setter Property="HorizontalAlignment" Value="Right" /></Style>
+  <Style Selector="ToggleButton.proxy-switch:focus-visible /template/ Border#SwitchTrack"><Setter Property="BorderBrush" Value="#1685FF" /><Setter Property="BorderThickness" Value="1" /></Style>
+  <Style Selector="Button.proxy-preset">
+    <Setter Property="MinHeight" Value="20" /><Setter Property="Height" Value="20" />
+    <Setter Property="Padding" Value="6,0" /><Setter Property="FontSize" Value="11" /><Setter Property="CornerRadius" Value="3" />
+  </Style>
+  <Style Selector="FlyoutPresenter.proxy-url-flyout">
+    <Setter Property="Padding" Value="20" /><Setter Property="CornerRadius" Value="12" />
+    <Setter Property="Background" Value="{DynamicResource WindowBackground}" />
+  </Style>
+  <Style Selector="ComboBox.rule-profile-picker"><Setter Property="Padding" Value="8,2" /><Setter Property="FontSize" Value="13" /></Style>
+  <Style Selector="Expander.rule-advanced"><Setter Property="BorderThickness" Value="0" /><Setter Property="Padding" Value="0" /><Setter Property="Background" Value="{DynamicResource SurfaceBackground}" /></Style>
+  <Style Selector="ListBox.program-list ListBoxItem"><Setter Property="Padding" Value="12,2" /><Setter Property="CornerRadius" Value="6" /></Style>
+  <Style Selector="ListBox.program-list ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter"><Setter Property="Background" Value="#251685FF" /></Style>
+  <Style Selector="DataGrid.monitor-list DataGridCell"><Setter Property="Padding" Value="0" /></Style>
+  <Style Selector="DataGrid.monitor-list ScrollBar#PART_VerticalScrollbar">
+    <Setter Property="Width" Value="12" /><Setter Property="MinWidth" Value="12" /><Setter Property="AllowAutoHide" Value="False" />
+  </Style>
+  <Style Selector="DataGrid.monitor-list DataGridRow:selected /template/ Rectangle#BackgroundRectangle"><Setter Property="Fill" Value="{DynamicResource SoftAccentBackground}" /></Style>
+  <Style Selector="FlyoutPresenter.monitor-detail">
+    <Setter Property="Background" Value="{DynamicResource SurfaceBackground}" /><Setter Property="BorderBrush" Value="{DynamicResource SurfaceBorder}" />
+    <Setter Property="BorderThickness" Value="1" /><Setter Property="CornerRadius" Value="10" /><Setter Property="Padding" Value="18" />
+  </Style>
+  <Style Selector="TextBox.monitor-search"><Setter Property="Height" Value="32" /><Setter Property="MinHeight" Value="32" /><Setter Property="Padding" Value="9,5" /></Style>
+  <Style Selector="Button.monitor-action"><Setter Property="Background" Value="Transparent" /><Setter Property="BorderThickness" Value="0" /><Setter Property="Padding" Value="4,0" /></Style>
+</Styles>

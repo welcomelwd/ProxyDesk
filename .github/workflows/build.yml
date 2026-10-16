@@ -1,0 +1,30 @@
+name: Build and verify
+on: [push, pull_request]
+jobs:
+  managed:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.402
+      - run: dotnet build src/ProxyDesk.Desktop/ProxyDesk.Desktop.csproj -c Release
+      - run: dotnet build src/ProxyDesk.Service/ProxyDesk.Service.csproj -c Release
+      - run: dotnet run --project tests/ProxyDesk.Tests/ProxyDesk.Tests.csproj -c Release
+      - if: runner.os == 'Windows'
+        run: dotnet run --project tests/ProxyDesk.ServiceTests/ProxyDesk.ServiceTests.csproj -c Release
+  native-dns:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.402
+      - shell: pwsh
+        run: ./scripts/bootstrap.ps1 -SkipSdk -SkipDriver
+      - shell: pwsh
+        run: ./scripts/build-native.ps1 -DnsTests
+      - run: dotnet run --project tests/ProxyDesk.Tests/ProxyDesk.Tests.csproj -c Release -- --native

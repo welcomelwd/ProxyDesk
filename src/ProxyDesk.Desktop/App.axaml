@@ -1,0 +1,24 @@
+<Application xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" x:Class="ProxyDesk.Desktop.App" RequestedThemeVariant="Light">
+  <Application.Styles>
+    <FluentTheme />
+    <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml" />
+    <Style Selector="Window"><Setter Property="FontFamily" Value="Segoe UI, Microsoft YaHei UI, Noto Sans, Noto Sans CJK SC" /><Setter Property="FontSize" Value="14" /><Setter Property="UseLayoutRounding" Value="True" /><Setter Property="Background" Value="{DynamicResource WindowBackground}" /></Style>
+    <Style Selector="FlyoutPresenter"><Setter Property="FontFamily" Value="Segoe UI, Microsoft YaHei UI, Noto Sans, Noto Sans CJK SC" /><Setter Property="FontSize" Value="14" /></Style>
+    <Style Selector="MenuFlyoutPresenter"><Setter Property="FontFamily" Value="Segoe UI, Microsoft YaHei UI, Noto Sans, Noto Sans CJK SC" /><Setter Property="FontSize" Value="14" /></Style>
+    <Style Selector="TextBlock"><Setter Property="Foreground" Value="{DynamicResource PrimaryForeground}" /></Style>
+    <Style Selector="Button"><Setter Property="CornerRadius" Value="6" /><Setter Property="MinHeight" Value="30" /><Setter Property="Padding" Value="12,4" /><Setter Property="FontSize" Value="13" /><Setter Property="Background" Value="{DynamicResource SurfaceBackground}" /><Setter Property="BorderBrush" Value="{DynamicResource SurfaceBorder}" /></Style>
+    <Style Selector="Button.primary"><Setter Property="Background" Value="#1769D2" /><Setter Property="Foreground" Value="White" /><Setter Property="BorderThickness" Value="0" /></Style>
+    <Style Selector="Button.flat"><Setter Property="Background" Value="Transparent" /><Setter Property="BorderThickness" Value="0" /></Style>
+    <Style Selector="Button.nav"><Setter Property="HorizontalAlignment" Value="Stretch" /><Setter Property="HorizontalContentAlignment" Value="Left" /><Setter Property="Background" Value="Transparent" /><Setter Property="BorderThickness" Value="0" /><Setter Property="Height" Value="38" /><Setter Property="Margin" Value="0,1" /><Setter Property="Padding" Value="12,0" /><Setter Property="FontSize" Value="15" /></Style>
+    <Style Selector="Button.nav.selected"><Setter Property="Background" Value="#1769D2" /><Setter Property="Foreground" Value="White" /></Style>
+    <Style Selector="Button.nav.selected /template/ ContentPresenter#PART_ContentPresenter"><Setter Property="Background" Value="#1769D2" /></Style>
+    <Style Selector="TextBox"><Setter Property="MinHeight" Value="32" /><Setter Property="CornerRadius" Value="6" /><Setter Property="FontSize" Value="14" /><Setter Property="BorderBrush" Value="{DynamicResource SurfaceBorder}" /></Style>
+    <Style Selector="ComboBox"><Setter Property="MinHeight" Value="30" /><Setter Property="CornerRadius" Value="6" /><Setter Property="FontSize" Value="13" /><Setter Property="BorderBrush" Value="{DynamicResource SurfaceBorder}" /></Style>
+    <Style Selector="DataGrid"><Setter Property="Background" Value="{DynamicResource SurfaceBackground}" /><Setter Property="BorderThickness" Value="0" /><Setter Property="GridLinesVisibility" Value="Horizontal" /><Setter Property="HorizontalGridLinesBrush" Value="{DynamicResource TableBorder}" /><Setter Property="RowHeight" Value="54" /><Setter Property="HeadersVisibility" Value="Column" /><Setter Property="CanUserReorderColumns" Value="False" /><Setter Property="IsReadOnly" Value="True" /></Style>
+    <Style Selector="DataGridColumnHeader"><Setter Property="Background" Value="{DynamicResource SurfaceBackground}" /><Setter Property="Foreground" Value="{DynamicResource SecondaryForeground}" /><Setter Property="FontSize" Value="13" /><Setter Property="Padding" Value="14,9" /></Style>
+    <Style Selector="DataGridCell"><Setter Property="Padding" Value="14,8" /></Style>
+    <Style Selector="ToggleSwitch"><Setter Property="OnContent" Value="" /><Setter Property="OffContent" Value="" /></Style>
+    <Style Selector="Border.card"><Setter Property="CornerRadius" Value="12" /><Setter Property="Padding" Value="20" /></Style>
+    <StyleInclude Source="avares://ProxyDesk.Desktop/ProxyStyles.axaml" />
+  </Application.Styles>
+</Application>

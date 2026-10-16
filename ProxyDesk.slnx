@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ProxyDesk.Core/ProxyDesk.Core.csproj" />
+    <Project Path="src/ProxyDesk.Desktop/ProxyDesk.Desktop.csproj" />
+    <Project Path="src/ProxyDesk.Platform.Windows/ProxyDesk.Platform.Windows.csproj" />
+    <Project Path="src/ProxyDesk.Service/ProxyDesk.Service.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ProxyDesk.ServiceTests/ProxyDesk.ServiceTests.csproj" />
+    <Project Path="tests/ProxyDesk.Tests/ProxyDesk.Tests.csproj" />
+  </Folder>
+</Solution>

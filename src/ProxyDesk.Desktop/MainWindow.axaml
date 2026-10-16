@@ -1,0 +1,34 @@
+<Window xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" x:Class="ProxyDesk.Desktop.MainWindow"
+        Width="1440" Height="920" MinWidth="1080" MinHeight="700" Title="ProxyDesk" Icon="/Assets/ProxyDesk.ico" WindowStartupLocation="CenterScreen"
+        WindowDecorations="None" CanResize="True" UseLayoutRounding="True" Background="{DynamicResource WindowBackground}">
+  <Border BorderBrush="{DynamicResource SurfaceBorder}" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
+    <Grid ColumnDefinitions="240,*">
+      <Border Grid.Column="0" Background="{DynamicResource SidebarBackground}" BorderBrush="{DynamicResource TableBorder}" BorderThickness="0,0,1,0">
+        <Grid RowDefinitions="64,76,*,52" Margin="12,0">
+          <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Spacing="9" Margin="7,0">
+            <Button x:Name="CloseWindowButton" Width="13" Height="13" MinHeight="0" Padding="0" CornerRadius="7" Background="#FF6059" BorderThickness="0" ToolTip.Tip="关闭到托盘" />
+            <Button x:Name="MinimizeButton" Width="13" Height="13" MinHeight="0" Padding="0" CornerRadius="7" Background="#FFBD2E" BorderThickness="0" ToolTip.Tip="最小化" />
+            <Button x:Name="MaximizeButton" Width="13" Height="13" MinHeight="0" Padding="0" CornerRadius="7" Background="#28C840" BorderThickness="0" ToolTip.Tip="最大化或还原" />
+            <ContentControl x:Name="SidebarSymbol" Margin="18,0,0,0" />
+          </StackPanel>
+          <StackPanel Grid.Row="1" Orientation="Horizontal" VerticalAlignment="Center" Spacing="13" Margin="7,0,0,8">
+            <Image Source="/Assets/ProxyDesk.png" Width="34" Height="34" />
+            <TextBlock Text="ProxyDesk" FontWeight="SemiBold" VerticalAlignment="Center" FontSize="17" />
+          </StackPanel>
+          <StackPanel x:Name="Navigation" Grid.Row="2" Spacing="2" />
+          <StackPanel Grid.Row="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="9,0" Spacing="8">
+            <Border x:Name="ServiceStatusDot" Width="7" Height="7" CornerRadius="4" Background="#98A2B3" VerticalAlignment="Center" /><TextBlock x:Name="ConnectionStatus" Text="正在连接服务…" FontSize="12" Foreground="{DynamicResource SecondaryForeground}" />
+          </StackPanel>
+        </Grid>
+      </Border>
+      <Grid Grid.Column="1" RowDefinitions="64,Auto,*">
+        <Border x:Name="TitleBar" Background="Transparent"><TextBlock x:Name="PageTitle" Text="仪表盘" FontSize="20" FontWeight="SemiBold" Margin="24,0" VerticalAlignment="Center" /></Border>
+        <Border x:Name="ErrorBanner" Grid.Row="1" Background="#FFF4E5" Padding="16,9" IsVisible="False">
+          <Grid ColumnDefinitions="*,Auto"><TextBlock x:Name="ErrorText" TextWrapping="Wrap" FontSize="12" Foreground="#8B5400" /><Button x:Name="DismissErrorButton" Grid.Column="1" Classes="flat" Content="×" Margin="8,0,0,0" /></Grid>
+        </Border>
+        <ContentControl x:Name="PageContent" Grid.Row="2" />
+      </Grid>
+      <Border x:Name="DialogScrim" Grid.ColumnSpan="2" Background="#33000000" IsVisible="False" ZIndex="100" />
+    </Grid>
+  </Border>
+</Window>
