@@ -1,6 +1,12 @@
 #include "pb_internal.h"
 
 // Connection tracking: forward table, reverse index, logged connections.
+BOOL connection_owner_matches(const CONNECTION_INFO *connection)
+{
+    return !connection->is_udp || udp_owner_matches(connection->is_ipv6,
+        connection->is_ipv6 ? (const void *)connection->src_ip6 : &connection->src_ip,
+        connection->src_port, &connection->owner);
+}
 
 // Reverse-index helpers. Keyed by the ORIGINAL destination (what the app connected to) -
 // an inbound relay reply carries that as its source. All callers hold `lock` exclusively.
@@ -36,7 +42,7 @@ void rev_unlink(CONNECTION_INFO *c)
     c->rev_next = NULL;
 }
 
-void add_connection(UINT16 src_port, BOOL is_udp, UINT32 src_ip, UINT32 dest_ip, UINT16 dest_port, UINT32 proxy_config_id)
+void add_connection(UINT16 src_port, BOOL is_udp, UINT32 src_ip, UINT32 dest_ip, UINT16 dest_port, UINT32 proxy_config_id, const PROCESS_IDENTITY *owner)
 {
     AcquireSRWLockExclusive(&lock);
 
@@ -53,6 +59,7 @@ void add_connection(UINT16 src_port, BOOL is_udp, UINT32 src_ip, UINT32 dest_ip,
             existing->orig_dest_ip = dest_ip;
             existing->orig_dest_port = dest_port;
             existing->proxy_config_id = proxy_config_id;
+            if (owner) existing->owner = *owner;
             existing->is_tracked = TRUE;
             existing->fin_flags = 0;
             existing->last_activity = GetTickCount64();
@@ -75,6 +82,7 @@ void add_connection(UINT16 src_port, BOOL is_udp, UINT32 src_ip, UINT32 dest_ip,
     conn->orig_dest_ip = dest_ip;
     conn->orig_dest_port = dest_port;
     conn->proxy_config_id = proxy_config_id;
+    if (owner) conn->owner = *owner;
     conn->is_tracked = TRUE;
     conn->is_ipv6 = FALSE;
     conn->last_activity = GetTickCount64();
@@ -85,7 +93,7 @@ void add_connection(UINT16 src_port, BOOL is_udp, UINT32 src_ip, UINT32 dest_ip,
     ReleaseSRWLockExclusive(&lock);
 }
 
-void add_connection_v6(UINT16 src_port, BOOL is_udp, const UINT8 src_ip6[16], const UINT8 dest_ip6[16], UINT16 dest_port, UINT32 proxy_config_id)
+void add_connection_v6(UINT16 src_port, BOOL is_udp, const UINT8 src_ip6[16], const UINT8 dest_ip6[16], UINT16 dest_port, UINT32 proxy_config_id, const PROCESS_IDENTITY *owner)
 {
     AcquireSRWLockExclusive(&lock);
 
@@ -100,6 +108,7 @@ void add_connection_v6(UINT16 src_port, BOOL is_udp, const UINT8 src_ip6[16], co
             memcpy(existing->orig_dest_ip6, dest_ip6, 16);
             existing->orig_dest_port = dest_port;
             existing->proxy_config_id = proxy_config_id;
+            if (owner) existing->owner = *owner;
             existing->is_tracked = TRUE;
             existing->fin_flags = 0;
             existing->last_activity = GetTickCount64();
@@ -125,6 +134,7 @@ void add_connection_v6(UINT16 src_port, BOOL is_udp, const UINT8 src_ip6[16], co
     memcpy(conn->orig_dest_ip6, dest_ip6, 16);
     conn->orig_dest_port = dest_port;
     conn->proxy_config_id = proxy_config_id;
+    if (owner) conn->owner = *owner;
     conn->is_tracked = TRUE;
     conn->last_activity = GetTickCount64();
     conn->next = connection_hash_table[hash];
@@ -140,7 +150,7 @@ BOOL get_connection_full_v6(UINT16 src_port, BOOL is_udp, UINT8 dest_ip6[16], UI
     int hash = src_port % CONNECTION_HASH_SIZE;
     CONNECTION_INFO *conn = connection_hash_table[hash];
     while (conn != NULL) {
-        if (conn->src_port == src_port && conn->is_udp == is_udp && conn->is_ipv6) {
+        if (conn->src_port == src_port && conn->is_udp == is_udp && conn->is_ipv6 && connection_owner_matches(conn)) {
             memcpy(dest_ip6, conn->orig_dest_ip6, 16);
             *dest_port = conn->orig_dest_port;
             if (proxy_config_id != NULL) *proxy_config_id = conn->proxy_config_id;
@@ -164,7 +174,7 @@ BOOL find_v6_udp_sender(const UINT8 orig_dest_ip6[16], UINT16 orig_dest_port, UI
     for (CONNECTION_INFO *conn = connection_rev_table[rev_hash_v6(orig_dest_ip6, orig_dest_port)];
          conn != NULL; conn = conn->rev_next) {
         if (conn->is_udp && conn->is_ipv6 && conn->orig_dest_port == orig_dest_port &&
-            memcmp(conn->orig_dest_ip6, orig_dest_ip6, 16) == 0) {
+            memcmp(conn->orig_dest_ip6, orig_dest_ip6, 16) == 0 && connection_owner_matches(conn)) {
             if (!found || conn->last_activity > best) {
                 memcpy(src_ip6, conn->src_ip6, 16);
                 *src_port = conn->src_port;
@@ -178,51 +188,33 @@ BOOL find_v6_udp_sender(const UINT8 orig_dest_ip6[16], UINT16 orig_dest_port, UI
 }
 
 // ---- UDP flow validation + direct-decision cache (see pb_internal.h) ----
-BOOL udp_flow_validate(UINT16 src_port, BOOL is_ipv6, UINT32 dest_ip, const UINT8 dest_ip6[16], UINT16 dest_port)
+BOOL udp_flow_validate(UINT16 src_port, BOOL is_ipv6, const void *src_ip, const void *dest_ip, UINT16 dest_port)
 {
     ULONGLONG now = GetTickCount64();
     int hash = src_port % CONNECTION_HASH_SIZE;
-    BOOL need_write = FALSE, valid = FALSE;
-
-    AcquireSRWLockShared(&lock);
-    CONNECTION_INFO *c = connection_hash_table[hash];
-    while (c != NULL && !(c->src_port == src_port && c->is_udp && c->is_ipv6 == is_ipv6)) c = c->next;
-    if (c == NULL) { ReleaseSRWLockShared(&lock); return FALSE; }
-    BOOL same = (c->orig_dest_port == dest_port) &&
-                (is_ipv6 ? memcmp(c->orig_dest_ip6, dest_ip6, 16) == 0 : c->orig_dest_ip == dest_ip);
-    if (c->last_activity < now && now - c->last_activity > UDP_REEVAL_IDLE_MS) need_write = TRUE;   // evict (guard: another thread may have stamped a later tick)
-    else if (same) { InterlockedExchange64((LONGLONG volatile*)&c->last_activity, (LONGLONG)now); valid = TRUE; }
-    else need_write = TRUE;                                                   // retarget
-    ReleaseSRWLockShared(&lock);
-    if (!need_write) return valid;
-
     AcquireSRWLockExclusive(&lock);
     CONNECTION_INFO **pp = &connection_hash_table[hash];
     while (*pp != NULL && !((*pp)->src_port == src_port && (*pp)->is_udp && (*pp)->is_ipv6 == is_ipv6)) pp = &(*pp)->next;
-    c = *pp;
+    CONNECTION_INFO *c = *pp;
     if (c == NULL) { ReleaseSRWLockExclusive(&lock); return FALSE; }
-    if (c->last_activity < now && now - c->last_activity > UDP_REEVAL_IDLE_MS)
+    BOOL valid = c->orig_dest_port == dest_port &&
+        memcmp(is_ipv6 ? (const void *)c->src_ip6 : &c->src_ip, src_ip, is_ipv6 ? 16 : 4) == 0 &&
+        memcmp(is_ipv6 ? (const void *)c->orig_dest_ip6 : &c->orig_dest_ip, dest_ip, is_ipv6 ? 16 : 4) == 0 &&
+        !(c->last_activity < now && now - c->last_activity > UDP_REEVAL_IDLE_MS) &&
+        udp_owner_matches(is_ipv6, src_ip, src_port, &c->owner);
+    if (!valid)
     {
         *pp = c->next;
         rev_unlink(c);
         free(c);
-        valid = FALSE;
     }
-    else
-    {
-        rev_unlink(c);                       // dest changes: re-key the reverse index
-        c->orig_dest_port = dest_port;
-        if (is_ipv6) memcpy(c->orig_dest_ip6, dest_ip6, 16); else c->orig_dest_ip = dest_ip;
-        c->last_activity = now;
-        rev_insert(c);
-        valid = TRUE;
-    }
+    else c->last_activity = now;
     ReleaseSRWLockExclusive(&lock);
     return valid;
 }
 
 #define UDP_DIRECT_SLOTS 4096
-typedef struct { UINT8 dst[16]; UINT16 sp, dp; BOOL v6; DWORD until; } UDP_DIRECT_ENTRY;
+typedef struct { UINT8 src[16], dst[16]; UINT16 sp, dp; BOOL v6; DWORD until; PROCESS_IDENTITY owner; } UDP_DIRECT_ENTRY;
 static UDP_DIRECT_ENTRY g_udp_direct[UDP_DIRECT_SLOTS];
 
 static UDP_DIRECT_ENTRY *udp_direct_slot(BOOL v6, const void *dst, UINT16 sp, UINT16 dp, UINT8 key[16])
@@ -234,19 +226,21 @@ static UDP_DIRECT_ENTRY *udp_direct_slot(BOOL v6, const void *dst, UINT16 sp, UI
     return &g_udp_direct[h % UDP_DIRECT_SLOTS];
 }
 
-BOOL udp_direct_cached(BOOL is_ipv6, const void *dst, UINT16 src_port, UINT16 dst_port)
+BOOL udp_direct_cached(BOOL is_ipv6, const void *src, const void *dst, UINT16 src_port, UINT16 dst_port)
 {
     UINT8 key[16];
     UDP_DIRECT_ENTRY *e = udp_direct_slot(is_ipv6, dst, src_port, dst_port, key);
     return e->until != 0 && e->sp == src_port && e->dp == dst_port && e->v6 == is_ipv6 &&
-           memcmp(e->dst, key, 16) == 0 && (int)(e->until - GetTickCount()) > 0;
+           memcmp(e->dst, key, 16) == 0 && memcmp(e->src, src, is_ipv6 ? 16 : 4) == 0 &&
+           (int)(e->until - GetTickCount()) > 0 && udp_owner_matches(is_ipv6, src, src_port, &e->owner);
 }
 
-void udp_direct_remember(BOOL is_ipv6, const void *dst, UINT16 src_port, UINT16 dst_port)
+void udp_direct_remember(BOOL is_ipv6, const void *src, const void *dst, UINT16 src_port, UINT16 dst_port, const PROCESS_IDENTITY *owner)
 {
     UINT8 key[16];
     UDP_DIRECT_ENTRY *e = udp_direct_slot(is_ipv6, dst, src_port, dst_port, key);
     memcpy(e->dst, key, 16); e->sp = src_port; e->dp = dst_port; e->v6 = is_ipv6;
+    memcpy(e->src, src, is_ipv6 ? 16 : 4); e->owner = *owner;
     DWORD u = GetTickCount() + UDP_DIRECT_TTL_MS;
     e->until = u ? u : 1;
 }
@@ -265,7 +259,7 @@ BOOL is_connection_tracked(UINT16 src_port, BOOL is_udp, BOOL is_ipv6)
     CONNECTION_INFO *conn = connection_hash_table[hash];
 
     while (conn != NULL) {
-        if (conn->src_port == src_port && conn->is_udp == is_udp && conn->is_ipv6 == is_ipv6 && conn->is_tracked) {
+        if (conn->src_port == src_port && conn->is_udp == is_udp && conn->is_ipv6 == is_ipv6 && conn->is_tracked && connection_owner_matches(conn)) {
             tracked = TRUE;
             break;
         }
@@ -286,7 +280,7 @@ BOOL get_connection(UINT16 src_port, BOOL is_udp, UINT32 *dest_ip, UINT16 *dest_
 
     while (conn != NULL)
     {
-        if (conn->src_port == src_port && conn->is_udp == is_udp && !conn->is_ipv6)
+        if (conn->src_port == src_port && conn->is_udp == is_udp && !conn->is_ipv6 && connection_owner_matches(conn))
         {
             *dest_ip = conn->orig_dest_ip;
             *dest_port = conn->orig_dest_port;
@@ -312,7 +306,7 @@ BOOL get_connection_full(UINT16 src_port, BOOL is_udp, UINT32 *dest_ip, UINT16 *
 
     while (conn != NULL)
     {
-        if (conn->src_port == src_port && conn->is_udp == is_udp && !conn->is_ipv6)
+        if (conn->src_port == src_port && conn->is_udp == is_udp && !conn->is_ipv6 && connection_owner_matches(conn))
         {
             *dest_ip = conn->orig_dest_ip;
             *dest_port = conn->orig_dest_port;
@@ -339,7 +333,7 @@ UINT32 get_connection_proxy_id(UINT16 src_port, BOOL is_udp)
 
     while (conn != NULL)
     {
-        if (conn->src_port == src_port && conn->is_udp == is_udp && !conn->is_ipv6)
+        if (conn->src_port == src_port && conn->is_udp == is_udp && !conn->is_ipv6 && connection_owner_matches(conn))
         {
             proxy_config_id = conn->proxy_config_id;
             break;

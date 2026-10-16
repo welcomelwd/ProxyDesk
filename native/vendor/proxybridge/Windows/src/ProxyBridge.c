@@ -227,7 +227,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
                         goto ipv6u_send;
                     }
 
-                    if (udp_flow_validate(sp, TRUE, 0, (const UINT8*)ipv6_header->DstAddr, dp))
+                    if (udp_flow_validate(sp, TRUE, ipv6_header->SrcAddr, ipv6_header->DstAddr, dp))
                     {
                         udp_header->DstPort = htons(LOCAL_UDP_RELAY_PORT);
                         static const UINT8 _lb6u2[16]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
@@ -255,7 +255,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
                         continue;
                     }
 
-                    if (udp_direct_cached(TRUE, ipv6_header->DstAddr, sp, dp))
+                    if (udp_direct_cached(TRUE, ipv6_header->SrcAddr, ipv6_header->DstAddr, sp, dp))
                     {
                         WinDivertSend(windivert_handle, packet, packet_len, NULL, &addr);
                         continue;
@@ -263,10 +263,11 @@ DWORD WINAPI packet_processor(LPVOID arg)
 
                     RuleAction action6u;
                     DWORD pid6u = 0;
+                    PROCESS_IDENTITY owner6u = {0};
                     UINT32 pcid6u = 0;
-                    action6u = check_process_rule_v6((const UINT8*)ipv6_header->SrcAddr, sp, (const UINT8*)ipv6_header->DstAddr, dp, TRUE, &pid6u, &pcid6u);
+                    action6u = check_process_rule_v6((const UINT8*)ipv6_header->SrcAddr, sp, (const UINT8*)ipv6_header->DstAddr, dp, TRUE, &pid6u, &pcid6u, &owner6u);
                     if (action6u == RULE_ACTION_DIRECT && pid6u > 0)
-                        udp_direct_remember(TRUE, ipv6_header->DstAddr, sp, dp);
+                        udp_direct_remember(TRUE, ipv6_header->SrcAddr, ipv6_header->DstAddr, sp, dp, &owner6u);
 
                     if (action6u == RULE_ACTION_PROXY && !g_localhost_via_proxy)
                     {
@@ -317,7 +318,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
                             // HTTP proxy can't relay UDP - drop
                             continue;
                         }
-                        add_connection_v6(sp, TRUE, (const UINT8*)ipv6_header->SrcAddr, (const UINT8*)ipv6_header->DstAddr, dp, pcid6u);
+                        add_connection_v6(sp, TRUE, (const UINT8*)ipv6_header->SrcAddr, (const UINT8*)ipv6_header->DstAddr, dp, pcid6u, &owner6u);
 
                         udp_header->DstPort = htons(LOCAL_UDP_RELAY_PORT);
                         static const UINT8 _lb6up[16]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
@@ -463,7 +464,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
                 RuleAction action6;
                 DWORD pid6 = 0;
                 UINT32 proxy_config_id6 = 0;
-                action6 = check_process_rule_v6((const UINT8*)ipv6_header->SrcAddr, sp, (const UINT8*)ipv6_header->DstAddr, dp, FALSE, &pid6, &proxy_config_id6);
+                action6 = check_process_rule_v6((const UINT8*)ipv6_header->SrcAddr, sp, (const UINT8*)ipv6_header->DstAddr, dp, FALSE, &pid6, &proxy_config_id6, NULL);
 
                 // ::1 IPv6 loopback - use  same "Localhost via Proxy" toggle as IPv4 127.
                 if (action6 == RULE_ACTION_PROXY && !g_localhost_via_proxy)
@@ -532,7 +533,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
                 }
                 else if (action6 == RULE_ACTION_PROXY)
                 {
-                    add_connection_v6(sp, FALSE, (const UINT8*)ipv6_header->SrcAddr, (const UINT8*)ipv6_header->DstAddr, dp, proxy_config_id6);
+                    add_connection_v6(sp, FALSE, (const UINT8*)ipv6_header->SrcAddr, (const UINT8*)ipv6_header->DstAddr, dp, proxy_config_id6, NULL);
                     port_set_decided(sp);
                     tcp_header->DstPort = htons(g_local_relay_port);
 
@@ -608,7 +609,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
                     WinDivertSend(windivert_handle, packet, packet_len, NULL, &addr);
                     continue;
                 }
-                else if (udp_flow_validate(ntohs(udp_header->SrcPort), FALSE, ip_header->DstAddr, NULL, ntohs(udp_header->DstPort)))
+                else if (udp_flow_validate(ntohs(udp_header->SrcPort), FALSE, &ip_header->SrcAddr, &ip_header->DstAddr, ntohs(udp_header->DstPort)))
                 {
                     UINT16 src_port = ntohs(udp_header->SrcPort);
                     udp_header->DstPort = htons(LOCAL_UDP_RELAY_PORT);
@@ -643,7 +644,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
                     }
 
                     // Known DIRECT flow (decided within the last few seconds): skip the lookup.
-                    if (udp_direct_cached(FALSE, &dest_ip, src_port, dest_port))
+                    if (udp_direct_cached(FALSE, &src_ip, &dest_ip, src_port, dest_port))
                     {
                         WinDivertSend(windivert_handle, packet, packet_len, NULL, &addr);
                         continue;
@@ -651,11 +652,12 @@ DWORD WINAPI packet_processor(LPVOID arg)
 
                     RuleAction action;
                     DWORD pid = 0;
+                    PROCESS_IDENTITY owner = {0};
                     UINT32 proxy_config_id = 0;
 
-                    action = check_process_rule(src_ip, src_port, dest_ip, dest_port, TRUE, &pid, &proxy_config_id);
+                    action = check_process_rule(src_ip, src_port, dest_ip, dest_port, TRUE, &pid, &proxy_config_id, &owner);
                     if (action == RULE_ACTION_DIRECT && pid > 0)
-                        udp_direct_remember(FALSE, &dest_ip, src_port, dest_port);
+                        udp_direct_remember(FALSE, &src_ip, &dest_ip, src_port, dest_port, &owner);
 
                     // override PROXY to DIRECT if localhost proxy is disabled and destination is localhost
                     BYTE dest_first_octet = (dest_ip >> 0) & 0xFF;
@@ -722,7 +724,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
 
                     if (action == RULE_ACTION_PROXY)
                     {
-                        add_connection(src_port, TRUE, src_ip, dest_ip, dest_port, proxy_config_id);
+                        add_connection(src_port, TRUE, src_ip, dest_ip, dest_port, proxy_config_id, &owner);
 
                         // redirect to UDP relay server at 127.0.0.1:34011
                         udp_header->DstPort = htons(LOCAL_UDP_RELAY_PORT);
@@ -913,7 +915,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
                 DWORD pid = 0;
                 UINT32 proxy_config_id = 0;
 
-                action = check_process_rule(src_ip, src_port, orig_dest_ip, orig_dest_port, FALSE, &pid, &proxy_config_id);
+                action = check_process_rule(src_ip, src_port, orig_dest_ip, orig_dest_port, FALSE, &pid, &proxy_config_id, NULL);
 
                 BYTE orig_dest_first_octet = (orig_dest_ip >> 0) & 0xFF;
                 if (action == RULE_ACTION_PROXY && !g_localhost_via_proxy && orig_dest_first_octet == 127)
@@ -984,7 +986,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
                 }
                 else if (action == RULE_ACTION_PROXY)
             {
-                add_connection(src_port, FALSE, src_ip, orig_dest_ip, orig_dest_port, proxy_config_id);
+                add_connection(src_port, FALSE, src_ip, orig_dest_ip, orig_dest_port, proxy_config_id, NULL);
                 // Mark this port as decided (not direct) so subsequent packets from
                 // the same source port skip the rule check.  The is_connection_tracked
                 // branch above handles the actual per-packet redirect.

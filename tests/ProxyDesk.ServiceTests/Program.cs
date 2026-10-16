@@ -119,4 +119,5 @@ using (var engine = new EngineService(options))
     var store = new ConfigurationStore(options);
     Check(store.GetPassword(proxy.Id) == "fixture-secret-unique", "DPAPI credentials can be recovered by the service");
 }
+if (args.Contains("--native")) await DescendantDnsTests.RunAsync(repository, Check);
 Console.WriteLine($"SERVICE_TEST_PASS: {count} checks");

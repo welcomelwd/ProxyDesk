@@ -18,7 +18,6 @@ public sealed class WindowsProcessCatalog
         public long Generation { get; } = generation;
         public ApplicationProcess Application { get; set; } = application;
         public Node? Parent { get; set; }
-        public bool LaunchInjected { get; set; }
     }
     private readonly object gate = new();
     private Dictionary<int, Node> nodes = [];
@@ -97,7 +96,7 @@ public sealed class WindowsProcessCatalog
         }
     }
 
-    public void RegisterChild(int parentPid, int childPid, long creationFileTime)
+    public string RegisterChild(int parentPid, int childPid, long creationFileTime)
     {
         using var process = Process.GetProcessById(childPid);
         if (process.StartTime.ToUniversalTime().ToFileTimeUtc() != creationFileTime) throw new InvalidDataException("Child process identity changed.");
@@ -106,18 +105,38 @@ public sealed class WindowsProcessCatalog
         if (information.ParentProcessId != parentPid) throw new InvalidDataException("The reported process is not a child of the caller.");
         var path = new StringBuilder(32768); var length = path.Capacity;
         if (!QueryFullProcessImageName(process.SafeHandle, 0, path, ref length)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        var script = WindowsRuleTargets.FindProcessScript(path.ToString(), ReadCommandLine(process.SafeHandle));
         lock (gate)
         {
             // Suspended children are not yet visible through WMI. Capture their identity before resuming them.
-            var child = new Node(childPid, parentPid, process.StartTime.ToUniversalTime().Ticks / 10, new(path.ToString()));
+            var child = new Node(childPid, parentPid, process.StartTime.ToUniversalTime().Ticks / 10, new(path.ToString(), script));
             var parent = GetNode(parentPid, []) ?? throw new InvalidDataException("Cannot identify the parent process.");
             if (parent.Generation > child.Generation) throw new InvalidDataException("The reported parent process was created after the child.");
             child.Parent = parent;
-            child.LaunchInjected = true;
             nodes[childPid] = child;
         }
+        return path.ToString();
     }
-    public bool IsLaunchInjected(int pid) { lock (gate) return nodes.TryGetValue(pid, out var node) && node.LaunchInjected; }
+
+    private static string ReadCommandLine(SafeProcessHandle process)
+    {
+        const int processCommandLineInformation = 60;
+        NtQueryProcessBuffer(process, processCommandLineInformation, 0, 0, out var size);
+        var buffer = Marshal.AllocHGlobal(size);
+        try
+        {
+            var status = NtQueryProcessBuffer(process, processCommandLineInformation, buffer, size, out _);
+            if (status != 0) throw new InvalidOperationException($"Cannot read child command line: 0x{status:X8}.");
+            var text = Marshal.PtrToStructure<UnicodeString>(buffer);
+            return Marshal.PtrToStringUni(text.Buffer, text.Length / 2)!;
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct UnicodeString { public ushort Length, MaximumLength; public nint Buffer; }
+    [DllImport("ntdll.dll", EntryPoint = "NtQueryInformationProcess")]
+    private static extern int NtQueryProcessBuffer(SafeProcessHandle process, int informationClass, nint buffer, int length, out int returnedLength);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct ProcessBasicInformation

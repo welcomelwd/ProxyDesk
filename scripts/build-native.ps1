@@ -35,14 +35,24 @@ foreach ($architecture in @('x86','x64')) {
         ('cl ' + $arguments + '"' + (Join-Path $projectRoot 'native/dns/probe.cpp') + '" /link /OUT:"' + (Join-Path $outputRoot "ProxyDesk.DnsProbe$suffix.exe") + '"'),
         ('cl ' + $arguments + '"' + (Join-Path $projectRoot 'native/dns/injector.cpp') + '" /link /OUT:"' + (Join-Path $outputRoot "ProxyDesk.Injector$suffix.exe") + '"')
     )
+    if ($DnsTests) {
+        Run-Native $architecture $buildDir @(
+            ('cl ' + $arguments + '"' + (Join-Path $projectRoot 'tests/native/descendant_probe.cpp') + '" /link /OUT:"' + (Join-Path $outputRoot "ProxyDesk.DescendantProbe$suffix.exe") + '"')
+        )
+    }
 }
 $launcherDefines = if ($DnsTests) { '/DPROXYDESK_DNS_TESTS ' } else { '' }
 Run-Native 'x64' (Join-Path $outputRoot 'x64') @(
     ('cl /nologo /std:c++17 /EHsc /O2 /MT /DUNICODE /D_UNICODE ' + $launcherDefines + '/I"' + (Join-Path $detours 'include') + '" "' + (Join-Path $projectRoot 'native/dns/launcher.cpp') + '" /link /LIBPATH:"' + (Join-Path $detours 'lib.X64') + '" detours.lib /OUT:"' + (Join-Path $outputRoot 'ProxyDesk.Launcher.exe') + '"')
 )
-if ($DnsTests) { Write-Output 'DNS_TEST_BUILD_PASS'; return }
 $sourceRoot = Join-Path $projectRoot 'native/vendor/proxybridge/Windows/src'
 $driverRoot = Join-Path $projectRoot 'native/vendor/windivert'
+if ($DnsTests) {
+    Run-Native 'x64' (Join-Path $outputRoot 'x64') @(
+        ('cl /nologo /O2 /MT /W3 /D_CRT_SECURE_NO_WARNINGS /I"' + (Join-Path $driverRoot 'include') + '" /I"' + $sourceRoot + '" /I"' + (Join-Path $projectRoot 'native/bridge') + '" "' + (Join-Path $projectRoot 'tests/native/process_lookup_tests.c') + '" /Fe:"' + (Join-Path $outputRoot 'ProxyDesk.ProcessTests.exe') + '"')
+    )
+    Write-Output 'DNS_TEST_BUILD_PASS'; return
+}
 $coreSources = Get-ChildItem $sourceRoot -Filter '*.c' | ForEach-Object { '"' + $_.FullName + '"' }
 $coreSources += '"' + (Join-Path $projectRoot 'native/bridge/proxy_desk.c') + '"'
 $symbols = Get-ChildItem $sourceRoot -Filter '*.c' | Get-Content | Select-String -AllMatches '\bWinDivert[A-Za-z0-9_]+(?=\s*\()' | ForEach-Object { $_.Matches.Value } | Sort-Object -Unique

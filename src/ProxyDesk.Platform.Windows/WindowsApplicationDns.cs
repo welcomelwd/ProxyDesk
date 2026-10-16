@@ -13,7 +13,15 @@ public sealed record WindowsDnsTarget(int Pid, string Path, DateTimeOffset Start
 [SupportedOSPlatform("windows")]
 public static class WindowsApplicationDns
 {
-    public static IReadOnlyList<WindowsDnsTarget> FindTargets(AppConfiguration configuration, string ownerSid, WindowsProcessCatalog processes)
+    public static int AttachmentMode(AppConfiguration configuration, RoutingDecision decision)
+    {
+        // Child IPC modes: DNS interception, no attachment, or process tracking only.
+        if (decision.Action == RoutingAction.Block || decision.Action == RoutingAction.Proxy && decision.StrictDns) return 0;
+        return configuration.ActiveProfile.Rules.Any(rule => rule.Id == decision.RuleId && rule.IncludeDescendants) ? 3 : 1;
+    }
+
+    public static IReadOnlyList<WindowsDnsTarget> FindTargets(AppConfiguration configuration, string ownerSid,
+        WindowsProcessCatalog processes, IReadOnlyList<ManagedProcess> attached)
     {
         var targets = new List<WindowsDnsTarget>();
         var upstream = WindowsIntegration.FindLocalProxyProcesses(configuration.Proxies);
@@ -33,12 +41,12 @@ public static class WindowsApplicationDns
                 using (var identity = new WindowsIdentity(token.DangerousGetHandle()))
                     if (identity.User?.Value != ownerSid) continue;
                 var decision = RuleEngine.Evaluate(configuration, processes.GetLineage(process.Id, executable), AppPlatform.Windows);
-                if (processes.IsLaunchInjected(process.Id)) continue;
-                var inherit = configuration.ActiveProfile.Rules.FirstOrDefault(rule => rule.Id == decision.RuleId)?.IncludeDescendants == true;
-                if (decision.Action != RoutingAction.Block && !(decision.Action == RoutingAction.Proxy && decision.StrictDns) && !inherit) continue;
                 if (!GetProcessTimes(handle, out var created, out _, out _, out _) || !IsWow64Process2(handle, out var machine, out var nativeMachine)) continue;
+                var startedAt = DateTimeOffset.FromFileTime(created);
+                // Reconfigure existing hooks when a rule is disabled or becomes direct.
+                if (AttachmentMode(configuration, decision) == 1 && !attached.Any(item => item.Pid == process.Id && item.StartedAt == startedAt)) continue;
                 if (nativeMachine != 0x8664 || machine is not (0 or 0x014c)) continue;
-                targets.Add(new(process.Id, executable, DateTimeOffset.FromFileTime(created), machine == 0x014c));
+                targets.Add(new(process.Id, executable, startedAt, machine == 0x014c));
             }
         }
         return targets;

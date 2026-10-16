@@ -9,6 +9,8 @@ try {
     if ($Native) { & "$PSScriptRoot/build-native.ps1" -DnsTests; $arguments += @('--','--native') }
     & $dotnetExe @arguments
     if ($LASTEXITCODE -ne 0) { throw 'Core or native DNS tests failed.' }
-    & $dotnetExe run --project tests/ProxyDesk.ServiceTests/ProxyDesk.ServiceTests.csproj -c Release
+    $serviceArguments = @('run','--project','tests/ProxyDesk.ServiceTests/ProxyDesk.ServiceTests.csproj','-c','Release')
+    if ($Native) { $serviceArguments += @('--','--native') }
+    & $dotnetExe @serviceArguments
     if ($LASTEXITCODE -ne 0) { throw 'Service tests failed.' }
 } finally { Pop-Location }

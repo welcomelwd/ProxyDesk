@@ -87,12 +87,17 @@ public sealed class DnsServer(EngineService engine, ServiceOptions options) : Ba
                 var length = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(8));
                 if (version != 1 || length is < 0 or > 65535) throw new InvalidDataException("Invalid DNS IPC message.");
                 int action; byte[] response;
-                if (operation == 2) { engine.RegisterManaged((int)pid, path); action = 0; response = []; }
+                if (operation == 2 && length == 4)
+                {
+                    var mode = new byte[4]; await pipe.ReadExactlyAsync(mode, timeout.Token);
+                    engine.RegisterManaged((int)pid, path, BinaryPrimitives.ReadInt32LittleEndian(mode) != 0);
+                    action = 0; response = [];
+                }
                 else if (OperatingSystem.IsWindows() && operation == 5 && length == 12)
                 {
                     var child = new byte[12]; await pipe.ReadExactlyAsync(child, timeout.Token);
-                    engine.Processes.RegisterChild((int)pid, BinaryPrimitives.ReadInt32LittleEndian(child), BinaryPrimitives.ReadInt64LittleEndian(child.AsSpan(4)));
-                    action = 0; response = [];
+                    action = engine.RegisterDnsChild((int)pid, BinaryPrimitives.ReadInt32LittleEndian(child), BinaryPrimitives.ReadInt64LittleEndian(child.AsSpan(4)));
+                    response = [];
                 }
                 else if (operation == 3) { action = engine.DnsPolicy(path, (int)pid); response = []; }
                 else if ((operation == 1 && length >= 12) || (operation == 4 && length >= 16))

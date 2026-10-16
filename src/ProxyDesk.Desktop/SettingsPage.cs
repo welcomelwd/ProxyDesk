@@ -86,7 +86,7 @@ internal sealed partial class Pages
 
     private Control AboutSettings()
     {
-        var name = Vertical(Text("ProxyDesk", 25, bold: true), Text("0.1.0", 13, "#85858B")); name.Spacing = 4;
+        var name = Vertical(Text("ProxyDesk", 25, bold: true), Text("0.1.1", 13, "#85858B")); name.Spacing = 4;
         var logo = new Image { Source = new Bitmap(Avalonia.Platform.AssetLoader.Open(new Uri("avares://ProxyDesk.Desktop/Assets/ProxyDesk.png"))), Width = 70, Height = 70 };
         var identity = Horizontal(logo, name); identity.Spacing = 20;
         return Vertical(Card(Vertical(identity, Text("按应用管理代理、直连与阻止规则。", 14, "#85858B"))),

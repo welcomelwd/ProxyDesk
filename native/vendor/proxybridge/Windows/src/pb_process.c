@@ -3,10 +3,9 @@
 
 // Process resolution: src-port -> PID lookups and the PID cache.
 
-// Reusable grow-only scratch buffer for the TCP/UDP owner-PID tables. These lookups run
-// only on the single packet-processor thread (NUM_PACKET_THREADS == 1) and each call
-// finishes scanning before the next one, so one shared buffer is safe and lets us skip a
-// malloc/free of the (potentially tens-of-KB) table on every new connection. Freed in Stop.
+// Packet and relay threads share the owner-table buffer. Protect both fetching and
+// scanning so another lookup cannot overwrite or reallocate the table being read.
+static SRWLOCK owner_table_lock = SRWLOCK_INIT;
 
 void *pidtbl_reserve(DWORD need)
 {
@@ -80,9 +79,11 @@ DWORD get_process_id_from_connection(UINT32 src_ip, UINT16 src_port)
     }
     sockmap_note_scan();
 
+    AcquireSRWLockExclusive(&owner_table_lock);
     MIB_TCPTABLE_OWNER_PID *tcp_table = (MIB_TCPTABLE_OWNER_PID *)owner_table_fetch(FALSE, AF_INET);
     if (tcp_table == NULL)
     {
+        ReleaseSRWLockExclusive(&owner_table_lock);
         return 0;
     }
 
@@ -105,6 +106,8 @@ DWORD get_process_id_from_connection(UINT32 src_ip, UINT16 src_port)
         }
     }
 
+    ReleaseSRWLockExclusive(&owner_table_lock);
+
     // store cache the result
     if (pid != 0)
         cache_pid(src_ip, src_port, pid, FALSE);
@@ -115,15 +118,14 @@ DWORD get_process_id_from_connection(UINT32 src_ip, UINT16 src_port)
 // Get process ID for UDP connection
 DWORD get_process_id_from_udp_connection(UINT32 src_ip, UINT16 src_port)
 {
-    DWORD cached_pid = get_cached_pid(src_ip, src_port, TRUE);
-    if (cached_pid != 0)
-        return cached_pid;
-
+    // UDP ports can change owners without a TCP-style SYN to invalidate the PID cache.
     DWORD pid = 0;
 
+    AcquireSRWLockExclusive(&owner_table_lock);
     MIB_UDPTABLE_OWNER_PID *udp_table = (MIB_UDPTABLE_OWNER_PID *)owner_table_fetch(TRUE, AF_INET);
     if (udp_table == NULL)
     {
+        ReleaseSRWLockExclusive(&owner_table_lock);
         return 0;
     }
 
@@ -157,9 +159,7 @@ DWORD get_process_id_from_udp_connection(UINT32 src_ip, UINT16 src_port)
         }
     }
 
-    if (pid != 0)
-        cache_pid(src_ip, src_port, pid, TRUE);
-
+    ReleaseSRWLockExclusive(&owner_table_lock);
     return pid;
 }
 
@@ -169,8 +169,9 @@ DWORD get_process_id_from_connection_v6(const UINT8 src_ip6[16], UINT16 src_port
     if (pid != 0) return pid;
     sockmap_note_scan();
 
+    AcquireSRWLockExclusive(&owner_table_lock);
     MIB_TCP6TABLE_OWNER_PID *tcp_table = (MIB_TCP6TABLE_OWNER_PID *)owner_table_fetch(FALSE, AF_INET6);
-    if (!tcp_table) return 0;
+    if (!tcp_table) { ReleaseSRWLockExclusive(&owner_table_lock); return 0; }
     for (DWORD i = 0; i < tcp_table->dwNumEntries; i++)
     {
         MIB_TCP6ROW_OWNER_PID *row = &tcp_table->table[i];
@@ -182,6 +183,7 @@ DWORD get_process_id_from_connection_v6(const UINT8 src_ip6[16], UINT16 src_port
             break;
         }
     }
+    ReleaseSRWLockExclusive(&owner_table_lock);
     return pid;   // buffer is reused, not freed
 }
 
@@ -189,6 +191,7 @@ DWORD get_process_id_from_udp_connection_v6(const UINT8 src_ip6[16], UINT16 src_
 {
     DWORD pid = 0;
 
+    AcquireSRWLockExclusive(&owner_table_lock);
     MIB_UDP6TABLE_OWNER_PID *udp_table = (MIB_UDP6TABLE_OWNER_PID *)owner_table_fetch(TRUE, AF_INET6);
     if (udp_table)
     {
@@ -204,7 +207,32 @@ DWORD get_process_id_from_udp_connection_v6(const UINT8 src_ip6[16], UINT16 src_
             }
         }
     }
+    ReleaseSRWLockExclusive(&owner_table_lock);
     return pid;   // buffer is reused, not freed
+}
+
+BOOL get_process_identity(DWORD pid, PROCESS_IDENTITY *identity)
+{
+    memset(identity, 0, sizeof(*identity));
+    if (pid == 0) return FALSE;
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!process) return FALSE;
+    FILETIME created, exited, kernel, user;
+    BOOL success = GetProcessTimes(process, &created, &exited, &kernel, &user);
+    CloseHandle(process);
+    if (!success) return FALSE;
+    identity->pid = pid;
+    memcpy(&identity->created, &created, sizeof(created));
+    return TRUE;
+}
+
+BOOL udp_owner_matches(BOOL is_ipv6, const void *src_ip, UINT16 src_port, const PROCESS_IDENTITY *owner)
+{
+    if (!owner->pid) return FALSE;
+    DWORD pid = is_ipv6 ? get_process_id_from_udp_connection_v6(src_ip, src_port)
+                       : get_process_id_from_udp_connection(*(const UINT32 *)src_ip, src_port);
+    PROCESS_IDENTITY current;
+    return pid == owner->pid && get_process_identity(pid, &current) && current.created == owner->created;
 }
 
 // Basename of a running process from a toolhelp snapshot. Used when the process cannot be

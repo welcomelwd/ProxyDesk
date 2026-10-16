@@ -174,7 +174,7 @@ internal sealed partial class Pages(MainWindow owner, MainViewModel vm)
     private async Task CollectDiagnosticsAsync()
     {
         var path = await SavePathAsync("收集诊断日志", "ProxyDesk-diagnostics.json"); if (path is null) return;
-        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { version = "0.1.0", os = Environment.OSVersion.ToString(),
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { version = "0.1.1", os = Environment.OSVersion.ToString(),
             runtime = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription, capabilities = vm.State?.Capabilities,
             error = vm.State?.LastError, activities = vm.State?.Activities }, JsonDefaults.Options));
     }

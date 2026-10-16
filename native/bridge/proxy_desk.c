@@ -84,6 +84,13 @@ static DWORD WINAPI dns_worker(void *state)
     return 0;
 }
 
+static int pass_dns_packet(void *packet, uint32_t length, WINDIVERT_ADDRESS *address)
+{
+    if (!WinDivertSend(windivert_handle, packet, length, NULL, address))
+        log_message("DNS passthrough failed (error %lu)", GetLastError());
+    return 1;
+}
+
 int pd_handle_dns_packet(void *packet, uint32_t length, void *address)
 {
     if (!pd_dns_callback || !pd_policy_callback) return 0;
@@ -96,14 +103,15 @@ int pd_handle_dns_packet(void *packet, uint32_t length, void *address)
     if (!udp || ntohs(udp->DstPort) != 53 || payload_length < 12) return 0;
     DWORD pid = ip ? get_process_id_from_udp_connection(ip->SrcAddr, ntohs(udp->SrcPort))
         : get_process_id_from_udp_connection_v6((UINT8 *)ip6->SrcAddr, ntohs(udp->SrcPort));
-    if (pid == 0 || pid == g_current_process_id) return 0;
+    if (pid == 0 || pid == g_current_process_id) return pass_dns_packet(packet, length, addr);
     char path[MAX_PROCESS_NAME], destination[64];
-    if (!get_process_name_from_pid(pid, path, sizeof(path))) return 0;
+    if (!get_process_name_from_pid(pid, path, sizeof(path))) return pass_dns_packet(packet, length, addr);
     if (ip) InetNtopA(AF_INET, &ip->DstAddr, destination, sizeof(destination));
     else InetNtopA(AF_INET6, ip6->DstAddr, destination, sizeof(destination));
     UINT32 proxy_id = 0;
     int action = pd_policy_callback(pid, path, destination, 53, TRUE, &proxy_id);
-    if (action == RULE_ACTION_DIRECT) return 0;
+    // A direct DNS decision is final; generic UDP flow state must not reroute it.
+    if (action == RULE_ACTION_DIRECT) return pass_dns_packet(packet, length, addr);
     if (action == RULE_ACTION_BLOCK) return 1;
     PdDnsJob *job = malloc(sizeof(*job));
     if (!job) return 1;

@@ -28,3 +28,4 @@ jobs:
       - shell: pwsh
         run: ./scripts/build-native.ps1 -DnsTests
       - run: dotnet run --project tests/ProxyDesk.Tests/ProxyDesk.Tests.csproj -c Release -- --native
+      - run: dotnet run --project tests/ProxyDesk.ServiceTests/ProxyDesk.ServiceTests.csproj -c Release -- --native

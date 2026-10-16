@@ -39,6 +39,9 @@ static thread_local bool inside_hook = false;
 static std::string module_path;
 static std::mutex initialize_mutex;
 static bool initialized = false;
+static bool dns_initialized = false;
+static std::atomic<bool> dns_enabled{true};
+static const GUID child_dns_mode = {0x23f4c8ac, 0xd68c, 0x4673, {0xa0, 0x97, 0xf3, 0x27, 0xe7, 0x63, 0x42, 0x91}};
 static const DWORD direct_result = 0xfffffffeu;
 static std::mutex memory_mutex;
 static std::unordered_map<void *, std::vector<void *>> owned_results;
@@ -114,11 +117,19 @@ static int exchange(DWORD operation, const std::vector<BYTE> &query, std::vector
     return ok ? static_cast<int>(reply[0]) : -1;
 }
 
-static DWORD WINAPI announce_ready(void *) { std::vector<BYTE> query, response; exchange(2, query, response); return 0; }
+static int register_ready()
+{
+    DWORD enabled = dns_enabled ? 1 : 0;
+    std::vector<BYTE> query(sizeof(enabled)), response;
+    memcpy(query.data(), &enabled, sizeof(enabled));
+    return exchange(2, query, response);
+}
+static DWORD WINAPI announce_ready(void *) { register_ready(); return 0; }
 
 static DWORD resolve_records(const wchar_t *name, WORD type, DWORD options, PDNS_RECORDW *records)
 {
     *records = nullptr;
+    if (!dns_enabled) return direct_result;
     if (!name || !*name) return ERROR_INVALID_PARAMETER;
     // Local literals and localhost never generate an upstream DNS query.
     IN_ADDR ip4; IN6_ADDR ip6;
@@ -164,7 +175,7 @@ static DWORD resolve_records(const wchar_t *name, WORD type, DWORD options, PDNS
 
 static DNS_STATUS WINAPI hook_dns_w(PCWSTR name, WORD type, DWORD options, PVOID extra, PDNS_RECORDW *records, PVOID *reserved)
 {
-    if (inside_hook) return original_dns_w(name, type, options, extra, records, reserved);
+    if (inside_hook || !dns_enabled) return original_dns_w(name, type, options, extra, records, reserved);
     RecursionGuard guard;
     auto status = resolve_records(name, type, options, records);
     return status == direct_result ? original_dns_w(name, type, options, extra, records, reserved) : status;
@@ -172,7 +183,7 @@ static DNS_STATUS WINAPI hook_dns_w(PCWSTR name, WORD type, DWORD options, PVOID
 
 static DNS_STATUS query_narrow(PCSTR name, WORD type, DWORD options, PVOID extra, PDNS_RECORDA *records, PVOID *reserved, bool utf8)
 {
-    if (inside_hook) return utf8 ? original_dns_utf8(name, type, options, extra, reinterpret_cast<PDNS_RECORD *>(records), reserved) : original_dns_a(name, type, options, extra, reinterpret_cast<PDNS_RECORD *>(records), reserved);
+    if (inside_hook || !dns_enabled) return utf8 ? original_dns_utf8(name, type, options, extra, reinterpret_cast<PDNS_RECORD *>(records), reserved) : original_dns_a(name, type, options, extra, reinterpret_cast<PDNS_RECORD *>(records), reserved);
     RecursionGuard guard; PDNS_RECORDW wide_records = nullptr;
     auto wide_name = widen(name, utf8 ? CP_UTF8 : CP_ACP);
     auto status = resolve_records(wide_name.c_str(), type, options, &wide_records);
@@ -219,7 +230,7 @@ static DWORD WINAPI dns_async_worker(void *argument)
 
 static DNS_STATUS WINAPI hook_dns_ex(PDNS_QUERY_REQUEST request, PDNS_QUERY_RESULT result, PDNS_QUERY_CANCEL cancel)
 {
-    if (inside_hook || !request || !result)
+    if (inside_hook || !dns_enabled || !request || !result)
         return original_dns_ex(request, result, cancel);
     if (request->Version != DNS_QUERY_REQUEST_VERSION1) {
         std::vector<BYTE> query, response;
@@ -346,7 +357,7 @@ static int build_addresses(const wchar_t *name, const wchar_t *service, const No
 
 static INT WSAAPI hook_addr_a(PCSTR name, PCSTR service, const ADDRINFOA *hints, PADDRINFOA *output)
 {
-    if (inside_hook || !output) return original_addr_a(name, service, hints, output);
+    if (inside_hook || !dns_enabled || !output) return original_addr_a(name, service, hints, output);
     RecursionGuard guard; *output = nullptr;
     auto wide_name = widen(name, CP_ACP), wide_service = widen(service, CP_ACP);
     int result = build_addresses<ADDRINFOA, char>(wide_name.c_str(), service ? wide_service.c_str() : nullptr, hints, output);
@@ -354,7 +365,7 @@ static INT WSAAPI hook_addr_a(PCSTR name, PCSTR service, const ADDRINFOA *hints,
 }
 static INT WSAAPI hook_addr_w(PCWSTR name, PCWSTR service, const ADDRINFOW *hints, PADDRINFOW *output)
 {
-    if (inside_hook || !output) return original_addr_w(name, service, hints, output);
+    if (inside_hook || !dns_enabled || !output) return original_addr_w(name, service, hints, output);
     RecursionGuard guard; *output = nullptr;
     int result = build_addresses<ADDRINFOW, wchar_t>(name, service, hints, output);
     return result == static_cast<int>(direct_result) ? original_addr_w(name, service, hints, output) : result;
@@ -381,7 +392,7 @@ static DWORD WINAPI address_async_worker(void *argument)
 static INT WSAAPI hook_addr_ex(PCWSTR name, PCWSTR service, DWORD space, LPGUID provider, const ADDRINFOEXW *hints, PADDRINFOEXW *output,
     timeval *timeout, LPOVERLAPPED overlapped, LPLOOKUPSERVICE_COMPLETION_ROUTINE completion, LPHANDLE handle)
 {
-    if (inside_hook || !output || provider || space != NS_DNS && space != NS_ALL || !name)
+    if (inside_hook || !dns_enabled || !output || provider || space != NS_DNS && space != NS_ALL || !name)
         return original_addr_ex(name, service, space, provider, hints, output, timeout, overlapped, completion, handle);
     if (!overlapped) {
         RecursionGuard guard; *output = nullptr;
@@ -412,7 +423,7 @@ static INT WSAAPI hook_addr_cancel(LPHANDLE handle)
 static INT WSAAPI hook_addr_ex_a(PCSTR name, PCSTR service, DWORD space, LPGUID provider, const ADDRINFOEXA *hints,
     PADDRINFOEXA *output, timeval *timeout, LPOVERLAPPED overlapped, LPLOOKUPSERVICE_COMPLETION_ROUTINE completion, LPHANDLE handle)
 {
-    if (inside_hook || !output || !name || space != NS_DNS && space != NS_ALL)
+    if (inside_hook || !dns_enabled || !output || !name || space != NS_DNS && space != NS_ALL)
         return original_addr_ex_a(name, service, space, provider, hints, output, timeout, overlapped, completion, handle);
     // The ANSI extended API does not support asynchronous operation on Windows.
     if (overlapped || completion || provider) return WSAEOPNOTSUPP;
@@ -424,7 +435,7 @@ static INT WSAAPI hook_addr_ex_a(PCSTR name, PCSTR service, DWORD space, LPGUID 
 
 static hostent *WSAAPI hook_host(const char *name)
 {
-    if (inside_hook) return original_host(name);
+    if (inside_hook || !dns_enabled) return original_host(name);
     ADDRINFOA hints{}; hints.ai_family = AF_INET;
     PADDRINFOA addresses = nullptr; int result = hook_addr_a(name, nullptr, &hints, &addresses);
     if (result) { WSASetLastError(WSAHOST_NOT_FOUND); return nullptr; }
@@ -440,17 +451,32 @@ static hostent *WSAAPI hook_host(const char *name)
     hook_free_a(addresses); return &host;
 }
 
-static void finish_child(PROCESS_INFORMATION &child, DWORD flags, LPPROCESS_INFORMATION output)
+static BOOL finish_child(PROCESS_INFORMATION &child, DWORD flags, LPPROCESS_INFORMATION output)
 {
+    DWORD error = ERROR_SUCCESS;
     FILETIME created, exit, kernel, user;
     if (GetProcessTimes(child.hProcess, &created, &exit, &kernel, &user)) {
         std::vector<BYTE> message(12), response;
         memcpy(message.data(), &child.dwProcessId, 4); memcpy(message.data() + 4, &created, 8);
-        exchange(5, message, response);
+        int mode = exchange(5, message, response);
+        if (mode == 0 || mode == 3) {
+            DWORD enabled = mode == 0 ? 1 : 0;
+            LPCSTR dll = module_path.c_str();
+            if ((!DetourUpdateProcessWithDll(child.hProcess, &dll, 1) &&
+                 !DetourProcessViaHelperW(child.dwProcessId, dll, original_create_w)) ||
+                !DetourCopyPayloadToProcess(child.hProcess, child_dns_mode, &enabled, sizeof(enabled))) error = GetLastError();
+        } else if (mode != 1) error = ERROR_PIPE_NOT_CONNECTED;
+    } else error = GetLastError();
+    if (error == ERROR_SUCCESS && !(flags & CREATE_SUSPENDED) && ResumeThread(child.hThread) == static_cast<DWORD>(-1)) error = GetLastError();
+    if (error != ERROR_SUCCESS) {
+        TerminateProcess(child.hProcess, error);
+        CloseHandle(child.hThread); CloseHandle(child.hProcess);
+        if (output) *output = {};
+        SetLastError(error); return FALSE;
     }
-    if (!(flags & CREATE_SUSPENDED)) ResumeThread(child.hThread);
     if (output) *output = child;
     else { CloseHandle(child.hThread); CloseHandle(child.hProcess); }
+    return TRUE;
 }
 
 static BOOL WINAPI hook_create_w(LPCWSTR app, LPWSTR command, LPSECURITY_ATTRIBUTES process_attributes, LPSECURITY_ATTRIBUTES thread_attributes,
@@ -458,20 +484,21 @@ static BOOL WINAPI hook_create_w(LPCWSTR app, LPWSTR command, LPSECURITY_ATTRIBU
 {
     if (dns_bypassed()) return original_create_w(app, command, process_attributes, thread_attributes, inherit, flags, environment, directory, startup, process);
     PROCESS_INFORMATION child{};
-    if (!DetourCreateProcessWithDllExW(app, command, process_attributes, thread_attributes, inherit, flags | CREATE_SUSPENDED, environment, directory, startup, &child, module_path.c_str(), original_create_w)) return FALSE;
-    finish_child(child, flags, process); return TRUE;
+    if (!original_create_w(app, command, process_attributes, thread_attributes, inherit, flags | CREATE_SUSPENDED, environment, directory, startup, &child)) return FALSE;
+    return finish_child(child, flags, process);
 }
 static BOOL WINAPI hook_create_a(LPCSTR app, LPSTR command, LPSECURITY_ATTRIBUTES process_attributes, LPSECURITY_ATTRIBUTES thread_attributes,
     BOOL inherit, DWORD flags, LPVOID environment, LPCSTR directory, LPSTARTUPINFOA startup, LPPROCESS_INFORMATION process)
 {
     if (dns_bypassed()) return original_create_a(app, command, process_attributes, thread_attributes, inherit, flags, environment, directory, startup, process);
     PROCESS_INFORMATION child{};
-    if (!DetourCreateProcessWithDllExA(app, command, process_attributes, thread_attributes, inherit, flags | CREATE_SUSPENDED, environment, directory, startup, &child, module_path.c_str(), original_create_a)) return FALSE;
-    finish_child(child, flags, process); return TRUE;
+    if (!original_create_a(app, command, process_attributes, thread_attributes, inherit, flags | CREATE_SUSPENDED, environment, directory, startup, &child)) return FALSE;
+    return finish_child(child, flags, process);
 }
 
-static DWORD install_hooks(bool update_threads)
+static DWORD install_hooks(bool update_threads, bool include_dns)
 {
+    if (initialized && (!include_dns || dns_initialized)) return ERROR_SUCCESS;
     using ThreadHandle = std::unique_ptr<void, decltype(&CloseHandle)>;
     std::vector<ThreadHandle> threads;
     if (update_threads) {
@@ -491,11 +518,14 @@ static DWORD install_hooks(bool update_threads)
     auto error = DetourTransactionBegin();
     if (error != NO_ERROR) return error;
 #define ATTACH(original, hook) DetourAttach(reinterpret_cast<PVOID *>(&original), reinterpret_cast<PVOID>(hook))
-    ATTACH(original_dns_w, hook_dns_w); ATTACH(original_dns_a, hook_dns_a); ATTACH(original_dns_utf8, hook_dns_utf8);
-    ATTACH(original_dns_ex, hook_dns_ex); ATTACH(original_dns_cancel, hook_dns_cancel);
-    ATTACH(original_addr_a, hook_addr_a); ATTACH(original_addr_w, hook_addr_w); ATTACH(original_addr_ex, hook_addr_ex); ATTACH(original_addr_ex_a, hook_addr_ex_a);
-    ATTACH(original_addr_cancel, hook_addr_cancel); ATTACH(original_free_a, hook_free_a); ATTACH(original_free_w, hook_free_w); ATTACH(original_free_ex, hook_free_ex);
-    ATTACH(original_host, hook_host); ATTACH(original_create_w, hook_create_w); ATTACH(original_create_a, hook_create_a);
+    if (include_dns && !dns_initialized) {
+        ATTACH(original_dns_w, hook_dns_w); ATTACH(original_dns_a, hook_dns_a); ATTACH(original_dns_utf8, hook_dns_utf8);
+        ATTACH(original_dns_ex, hook_dns_ex); ATTACH(original_dns_cancel, hook_dns_cancel);
+        ATTACH(original_addr_a, hook_addr_a); ATTACH(original_addr_w, hook_addr_w); ATTACH(original_addr_ex, hook_addr_ex); ATTACH(original_addr_ex_a, hook_addr_ex_a);
+        ATTACH(original_addr_cancel, hook_addr_cancel); ATTACH(original_free_a, hook_free_a); ATTACH(original_free_w, hook_free_w); ATTACH(original_free_ex, hook_free_ex);
+        ATTACH(original_host, hook_host);
+    }
+    if (!initialized) { ATTACH(original_create_w, hook_create_w); ATTACH(original_create_a, hook_create_a); }
 #undef ATTACH
     for (auto &thread : threads) {
         DWORD status;
@@ -504,7 +534,7 @@ static DWORD install_hooks(bool update_threads)
         if (error != NO_ERROR) { DetourTransactionAbort(); return error; }
     }
     error = DetourTransactionCommit();
-    if (error == NO_ERROR) initialized = true;
+    if (error == NO_ERROR) { initialized = true; dns_initialized |= include_dns; }
     return error;
 }
 
@@ -512,12 +542,13 @@ extern "C" DWORD WINAPI ProxyDeskInitialize(void *)
 {
     dns_bypassed();
     std::lock_guard<std::mutex> lock(initialize_mutex);
-    if (!initialized) {
-        auto error = install_hooks(true);
-        if (error != ERROR_SUCCESS) return error;
-    }
     std::vector<BYTE> query, response;
-    return exchange(2, query, response) == 0 ? ERROR_SUCCESS : ERROR_PIPE_NOT_CONNECTED;
+    int policy = exchange(3, query, response);
+    if (policy < 0) return ERROR_PIPE_NOT_CONNECTED;
+    auto error = install_hooks(true, policy != 1);
+    if (error != ERROR_SUCCESS) return error;
+    dns_enabled = policy != 1;
+    return register_ready() == 0 ? ERROR_SUCCESS : ERROR_PIPE_NOT_CONNECTED;
 }
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
@@ -530,8 +561,11 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
         // Launch-time loading is initialized before the application resumes. Runtime loading
         // is initialized by the helper outside the loader lock, with existing threads enlisted.
         if (!DetourRestoreAfterWith()) return TRUE;
+        DWORD size = 0;
+        auto mode = static_cast<DWORD *>(DetourFindPayloadEx(child_dns_mode, &size));
+        if (mode && size == sizeof(DWORD)) dns_enabled = *mode != 0;
         dns_bypassed();
-        if (install_hooks(false) != ERROR_SUCCESS) return FALSE;
+        if (install_hooks(false, dns_enabled) != ERROR_SUCCESS) return FALSE;
         QueueUserWorkItem(announce_ready, nullptr, WT_EXECUTEDEFAULT);
     }
     return TRUE;

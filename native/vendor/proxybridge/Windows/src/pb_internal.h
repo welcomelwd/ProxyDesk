@@ -94,6 +94,8 @@ typedef struct DNS_CACHE_ENTRY_V6 {
     struct DNS_CACHE_ENTRY_V6 *next;
 } DNS_CACHE_ENTRY_V6;
 
+typedef struct { DWORD pid; ULONGLONG created; } PROCESS_IDENTITY;
+
 typedef struct CONNECTION_INFO {
     UINT16 src_port;
     BOOL   is_udp;             // protocol - a TCP and a UDP flow may share a local port
@@ -103,6 +105,7 @@ typedef struct CONNECTION_INFO {
     BOOL   is_tracked;
     ULONGLONG last_activity;
     UINT32 proxy_config_id;
+    PROCESS_IDENTITY owner;
     BOOL   is_ipv6;
     UINT8  src_ip6[16];        // raw IPv6 src (only valid when is_ipv6)
     UINT8  orig_dest_ip6[16];  // raw IPv6 dest (only valid when is_ipv6)
@@ -276,7 +279,7 @@ void cleanup_stale_pid_cache(void);
 
 // ---- pb_rules.c ----
 BOOL is_ipv6_multicast_or_linklocal(const UINT8 ip6[16]);
-RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port, const UINT8 dest_ip6[16], UINT16 dest_port, BOOL is_udp, DWORD *out_pid, UINT32 *out_proxy_config_id);
+RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port, const UINT8 dest_ip6[16], UINT16 dest_port, BOOL is_udp, DWORD *out_pid, UINT32 *out_proxy_config_id, PROCESS_IDENTITY *out_owner);
 BOOL match_ip_pattern(const char *pattern, UINT32 ip);
 BOOL match_port_pattern(const char *pattern, UINT16 port);
 BOOL ip_match_wrapper(const char *token, const void *data);
@@ -298,7 +301,10 @@ RuleAction match_rule_inner(const char *process_name, UINT32 dest_ip, UINT16 des
 RuleAction match_rule(const char *process_name, UINT32 dest_ip, UINT16 dest_port, BOOL is_udp, UINT32 *out_proxy_config_id);
 RuleAction match_rule_v6_inner(const char *process_name, const UINT8 dest_ip6[16], UINT16 dest_port, BOOL is_udp, UINT32 *out_proxy_config_id);
 RuleAction match_rule_v6(const char *process_name, const UINT8 dest_ip6[16], UINT16 dest_port, BOOL is_udp, UINT32 *out_proxy_config_id);
-RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest_ip, UINT16 dest_port, BOOL is_udp, DWORD *out_pid, UINT32 *out_proxy_config_id);
+RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest_ip, UINT16 dest_port, BOOL is_udp, DWORD *out_pid, UINT32 *out_proxy_config_id, PROCESS_IDENTITY *out_owner);
+BOOL get_process_identity(DWORD pid, PROCESS_IDENTITY *identity);
+BOOL udp_owner_matches(BOOL is_ipv6, const void *src_ip, UINT16 src_port, const PROCESS_IDENTITY *owner);
+BOOL connection_owner_matches(const CONNECTION_INFO *connection);
 void update_has_active_rules(void);
 
 // ---- pb_proxy.c ----
@@ -336,26 +342,23 @@ UINT32 rev_hash_v4(UINT32 dest_ip, UINT16 dest_port);
 UINT32 rev_hash_v6(const UINT8 dest_ip6[16], UINT16 dest_port);
 void rev_insert(CONNECTION_INFO *c);
 void rev_unlink(CONNECTION_INFO *c);
-void add_connection(UINT16 src_port, BOOL is_udp, UINT32 src_ip, UINT32 dest_ip, UINT16 dest_port, UINT32 proxy_config_id);
-void add_connection_v6(UINT16 src_port, BOOL is_udp, const UINT8 src_ip6[16], const UINT8 dest_ip6[16], UINT16 dest_port, UINT32 proxy_config_id);
+void add_connection(UINT16 src_port, BOOL is_udp, UINT32 src_ip, UINT32 dest_ip, UINT16 dest_port, UINT32 proxy_config_id, const PROCESS_IDENTITY *owner);
+void add_connection_v6(UINT16 src_port, BOOL is_udp, const UINT8 src_ip6[16], const UINT8 dest_ip6[16], UINT16 dest_port, UINT32 proxy_config_id, const PROCESS_IDENTITY *owner);
 BOOL get_connection_full_v6(UINT16 src_port, BOOL is_udp, UINT8 dest_ip6[16], UINT16 *dest_port, UINT32 *proxy_config_id);
 BOOL find_v6_udp_sender(const UINT8 orig_dest_ip6[16], UINT16 orig_dest_port, UINT8 src_ip6[16], UINT16 *src_port);
-// UDP flow validation for the app->relay redirect. A UDP "connection" is keyed by source port
-// only, so it must be re-checked on every datagram: (a) if the destination changed (a socket
-// that moves to another server, e.g. a voice call migrating) the entry is retargeted, and
-// (b) if the flow has been idle longer than UDP_REEVAL_IDLE_MS the source port may belong to a
-// different socket now, so the entry is dropped and the caller re-evaluates the rules.
+// UDP decisions are valid only for the same source address, process generation and destination.
+// Changed owners or destinations must pass through policy evaluation again.
 // Returns TRUE if a valid entry exists (and was refreshed), FALSE if not tracked / evicted.
 #define UDP_REEVAL_IDLE_MS 20000
-BOOL udp_flow_validate(UINT16 src_port, BOOL is_ipv6, UINT32 dest_ip, const UINT8 dest_ip6[16], UINT16 dest_port);
+BOOL udp_flow_validate(UINT16 src_port, BOOL is_ipv6, const void *src_ip, const void *dest_ip, UINT16 dest_port);
 
-// Short-lived cache of DIRECT decisions for UDP, keyed by (src port, destination). UDP has no
+// Short-lived cache of DIRECT decisions for UDP, with source and owner identity checks. UDP has no
 // SYN to decide once per connection, so every datagram of a direct flow used to repeat the
 // full process/rule lookup (OpenProcess per packet) on the single capture thread.
 // Capture-thread only (NUM_PACKET_THREADS == 1), so no locking.
 #define UDP_DIRECT_TTL_MS 5000
-BOOL udp_direct_cached(BOOL is_ipv6, const void *dst, UINT16 src_port, UINT16 dst_port);
-void udp_direct_remember(BOOL is_ipv6, const void *dst, UINT16 src_port, UINT16 dst_port);
+BOOL udp_direct_cached(BOOL is_ipv6, const void *src, const void *dst, UINT16 src_port, UINT16 dst_port);
+void udp_direct_remember(BOOL is_ipv6, const void *src, const void *dst, UINT16 src_port, UINT16 dst_port, const PROCESS_IDENTITY *owner);
 void udp_direct_reset(void);
 
 // TCP close handling. A FIN must NOT delete the entry on the spot: a client that sends and closes

@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
-$archivePath = Join-Path $projectRoot 'artifacts/ProxyDesk-0.1.0-source.zip'
+$archivePath = Join-Path $projectRoot 'artifacts/ProxyDesk-0.1.1-source.zip'
 New-Item -ItemType Directory -Force -Path (Split-Path $archivePath -Parent) | Out-Null
 $stream = [IO.File]::Open($archivePath, [IO.FileMode]::Create)
 $archive = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create)

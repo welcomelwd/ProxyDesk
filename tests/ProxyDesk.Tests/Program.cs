@@ -132,6 +132,12 @@ if (args.Length > 0 && args[0] == "--native")
     using var bypass = new EventWaitHandle(false, EventResetMode.ManualReset, @"Global\ProxyDesk.Dns.Tests.Bypass.v1");
     bypass.Reset();
     var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
+    using (var processTests = Process.Start(new ProcessStartInfo(Path.Combine(root, "artifacts/native-tests/ProxyDesk.ProcessTests.exe"))
+        { UseShellExecute = false, CreateNoWindow = true })!)
+    {
+        await processTests.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        Check(processTests.ExitCode == 0, "Native process lookup handles UDP port reuse and concurrent owner tables");
+    }
     await using var server = new DnsFixture();
     using var stop = new CancellationTokenSource(); var serverTask = server.RunAsync(stop.Token);
     var launcher = Path.Combine(root, "artifacts/native-tests/ProxyDesk.Launcher.exe");
@@ -275,7 +281,7 @@ sealed class DnsFixture : IAsyncDisposable
                 var header = new byte[12]; await pipe.ReadExactlyAsync(header, token); var length = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(8));
                 var query = new byte[length]; if (length > 0) await pipe.ReadExactlyAsync(query, token);
                 var operation = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(4));
-                if (operation == 5) query = [];
+                if (operation is 2 or 5) query = [];
                 else if (operation == 4) query = query[4..];
                 if (query.Length > 0 && DnsWire.QuestionName(query).StartsWith("cancel")) await Task.Delay(500, token);
                 var response = query.Length > 0 ? Answer(query) : [];

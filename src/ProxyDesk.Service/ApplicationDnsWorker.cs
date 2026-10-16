@@ -18,13 +18,13 @@ public sealed class ApplicationDnsWorker(EngineService engine, ServiceOptions op
             if (!ReferenceEquals(previous, configuration)) { attempted.Clear(); previous = configuration; }
             if (configuration is null) continue;
             IReadOnlyList<WindowsDnsTarget> targets;
-            try { engine.Processes.Refresh(); targets = WindowsApplicationDns.FindTargets(configuration, options.OwnerSid, engine.Processes); }
+            try { engine.Processes.Refresh(); targets = WindowsApplicationDns.FindTargets(configuration, options.OwnerSid, engine.Processes, engine.ManagedDnsProcesses); }
             catch (Exception error) when (error is System.ComponentModel.Win32Exception or System.Management.ManagementException or System.Runtime.InteropServices.COMException)
             { engine.Activity("Warning", "Automatic DNS scan failed: " + error.Message); continue; }
             attempted.IntersectWith(targets.Select(target => (target.Pid, target.StartedAt)));
             foreach (var target in targets)
             {
-                if (engine.IsDnsAttached(target.Pid, target.StartedAt) || !attempted.Add((target.Pid, target.StartedAt))) continue;
+                if (!attempted.Add((target.Pid, target.StartedAt))) continue;
                 try { await WindowsApplicationDns.AttachAsync(target, token); }
                 catch (Exception error) when (error is IOException or System.ComponentModel.Win32Exception)
                 {

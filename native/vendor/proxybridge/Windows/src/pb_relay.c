@@ -283,7 +283,7 @@ DWORD WINAPI udp_relay_server(LPVOID arg)
                     for (CONNECTION_INFO *conn = connection_rev_table[rev_hash_v4(src_ip, src_port)];
                          conn != NULL; conn = conn->rev_next)
                     {
-                        if (conn->is_udp && !conn->is_ipv6 && conn->orig_dest_ip == src_ip && conn->orig_dest_port == src_port)
+                        if (conn->is_udp && !conn->is_ipv6 && conn->orig_dest_ip == src_ip && conn->orig_dest_port == src_port && connection_owner_matches(conn))
                         {
                             if (!found || conn->last_activity > best_activity)
                             {

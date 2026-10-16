@@ -38,7 +38,7 @@ static DWORD retry_tcp_pid(DWORD pid, BOOL ipv6, UINT32 src_ip, const UINT8 *src
     return pid;
 }
 
-RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port, const UINT8 dest_ip6[16], UINT16 dest_port, BOOL is_udp, DWORD *out_pid, UINT32 *out_proxy_config_id)
+RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port, const UINT8 dest_ip6[16], UINT16 dest_port, BOOL is_udp, DWORD *out_pid, UINT32 *out_proxy_config_id, PROCESS_IDENTITY *out_owner)
 {
     DWORD pid;
     char process_name[MAX_PROCESS_NAME];
@@ -48,6 +48,7 @@ RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port, const
     if (pid == 0 && !is_udp)
         pid = retry_tcp_pid(pid, TRUE, 0, src_ip6, src_port);
     if (out_pid) *out_pid = pid;
+    if (out_owner) get_process_identity(pid, out_owner);
     if (pid == 0) return RULE_ACTION_DIRECT;
     if (pid == g_current_process_id) return RULE_ACTION_DIRECT;
     if (!get_process_name_from_pid(pid, process_name, sizeof(process_name)))
@@ -737,20 +738,19 @@ RuleAction match_rule_v6(const char *process_name, const UINT8 dest_ip6[16], UIN
     return action;
 }
 
-RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest_ip, UINT16 dest_port, BOOL is_udp, DWORD *out_pid, UINT32 *out_proxy_config_id)
+RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest_ip, UINT16 dest_port, BOOL is_udp, DWORD *out_pid, UINT32 *out_proxy_config_id, PROCESS_IDENTITY *out_owner)
 {
     DWORD pid;
     char process_name[MAX_PROCESS_NAME];
 
     pid = is_udp ? get_process_id_from_udp_connection(src_ip, src_port) : get_process_id_from_connection(src_ip, src_port);
-    if (pid == 0 && is_udp)
-        pid = get_process_id_from_connection(src_ip, src_port);
     if (pid == 0 && !is_udp)
         pid = retry_tcp_pid(pid, FALSE, src_ip, NULL, src_port);
 
         // this may cause issues - need to find alternative
     if (out_pid != NULL)
         *out_pid = pid;
+    if (out_owner) get_process_identity(pid, out_owner);
 
     if (pid == 0)
         return RULE_ACTION_DIRECT;

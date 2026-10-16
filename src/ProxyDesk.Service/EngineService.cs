@@ -121,18 +121,26 @@ public sealed class EngineService : IDisposable
         }
         finally { mutations.Release(); }
     }
-    public bool RegisterManaged(int pid, string path)
+    public bool RegisterManaged(int pid, string path, bool dnsReady)
     {
         using var process = Process.GetProcessById(pid);
-        lock (stateLock) managed[pid] = new(pid, path, process.StartTime.ToUniversalTime(), true);
+        lock (stateLock) managed[pid] = new(pid, path, process.StartTime.ToUniversalTime(), dnsReady);
         return true;
     }
     public AppConfiguration? DnsConfiguration => running ? rules.Configuration : null;
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     public WindowsProcessCatalog Processes => processes!;
-    public bool IsDnsAttached(int pid, DateTimeOffset startedAt)
+    public IReadOnlyList<ManagedProcess> ManagedDnsProcesses
     {
-        lock (stateLock) return managed.TryGetValue(pid, out var process) && process.StartedAt == startedAt && process.DnsReady;
+        get { lock (stateLock) return managed.Values.ToArray(); }
+    }
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public int RegisterDnsChild(int parentPid, int childPid, long creationFileTime)
+    {
+        var path = processes!.RegisterChild(parentPid, childPid, creationFileTime);
+        var snapshot = DnsConfiguration;
+        if (snapshot is null || IsUpstreamProcess(childPid, snapshot)) return 1;
+        return WindowsApplicationDns.AttachmentMode(snapshot, RuleEngine.Evaluate(snapshot, GetLineage(childPid, path), AppPlatform.Windows));
     }
     private bool IsUpstreamProcess(int pid, AppConfiguration configuration) => pid == Environment.ProcessId ||
         OperatingSystem.IsWindows() && WindowsIntegration.FindLocalProxyProcesses(configuration.Proxies).Contains(pid);
