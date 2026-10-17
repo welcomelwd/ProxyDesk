@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Threading.Channels;
 using ProxyDesk.Core;
 using ProxyDesk.Platform.Windows;
 using ActivityEvent = ProxyDesk.Core.ActivityEvent;
@@ -12,13 +13,19 @@ public sealed class EngineService : IDisposable
     private readonly SemaphoreSlim mutations = new(1, 1);
     private readonly RuleEngine rules = new();
     private readonly DohResolver dns = new();
+    private readonly SemaphoreSlim dnsSlots = new(8, 8);
+    private CancellationTokenSource dnsLifetime = new();
     private readonly ConfigurationStore store;
     private readonly ServiceRuntime runtime;
     private readonly ITrafficBackend backend;
     private readonly WindowsProcessCatalog? processes;
     private readonly Queue<ConnectionEvent> connections = new();
     private readonly Queue<ActivityEvent> activities = new();
-    private readonly Dictionary<int, ManagedProcess> managed = [];
+    private readonly Channel<ActivityEvent> journal = Channel.CreateBounded<ActivityEvent>(new BoundedChannelOptions(4096)
+    { FullMode = BoundedChannelFullMode.Wait, SingleReader = true });
+    internal ChannelReader<ActivityEvent> ActivityReader => journal.Reader;
+    private long droppedActivities;
+    internal long TakeDroppedActivities() => Interlocked.Exchange(ref droppedActivities, 0);
     private readonly Dictionary<Guid, ProxyTestResult> tests = [];
     private volatile bool running;
     private bool recording = true;
@@ -38,15 +45,19 @@ public sealed class EngineService : IDisposable
         if (OperatingSystem.IsWindows()) { processes = new(); backend = new WindowsTrafficBackend(rules, ResolveWire, processes.GetLineage); }
         else backend = new UnavailableBackend();
         backend.Connection += AddConnection;
-        backend.Log += message => Activity("Info", message);
+        backend.Log += message => Activity(message.StartsWith("DNS packet failed", StringComparison.Ordinal) || message.StartsWith("Policy evaluation failed", StringComparison.Ordinal) ? "Error" :
+            message.StartsWith("Traffic policy delayed", StringComparison.Ordinal) ? "Warning" : "Info", message);
         backend.Apply(store.Configuration, store.GetPassword);
         Activity("Info", "ProxyDesk service started.");
+        Activity("Info", "DNS mode=network-only injection=disabled; DNS sent by shared Windows services stays with the system resolver because the original application cannot be identified. Application-owned port 53 traffic follows its rule; application DoH/DoT follows normal traffic rules.");
     }
     public void Activity(string level, string message)
     {
         lock (stateLock)
         {
-            activities.Enqueue(new(Interlocked.Increment(ref sequence), DateTimeOffset.Now, level, message));
+            var entry = new ActivityEvent(Interlocked.Increment(ref sequence), DateTimeOffset.Now, level, message);
+            activities.Enqueue(entry);
+            if (!journal.Writer.TryWrite(entry)) Interlocked.Increment(ref droppedActivities);
             while (activities.Count > 2000) activities.Dequeue();
         }
     }
@@ -63,14 +74,9 @@ public sealed class EngineService : IDisposable
     {
         lock (stateLock)
         {
-            foreach (var pid in managed.Keys.ToArray())
-            {
-                try { using var process = Process.GetProcessById(pid); if (process.HasExited || process.StartTime.ToUniversalTime() != managed[pid].StartedAt.UtcDateTime) managed.Remove(pid); }
-                catch (ArgumentException) { managed.Remove(pid); }
-            }
             return new(JsonDefaults.Clone(store.Configuration), running, startedAt, Ssid, recording, discovery,
                 lastError, backend.Capabilities, connections.TakeLast(1000).Reverse().ToArray(),
-                activities.TakeLast(300).Reverse().ToArray(), managed.Values.ToArray(), tests.Values.ToArray(), runtime);
+                activities.TakeLast(300).Reverse().ToArray(), tests.Values.ToArray(), runtime);
         }
     }
     public async Task<RpcResponse> DispatchAsync(RpcRequest request, CancellationToken token)
@@ -96,10 +102,10 @@ public sealed class EngineService : IDisposable
                     Activity("Info", "Configuration updated: " + store.Configuration.ActiveProfile.Name);
                     return RpcResponse.Ok(State());
                 case "Start":
-                    if (!running) { backend.Start(); running = true; startedAt = DateTimeOffset.Now; lastError = null; Activity("Info", "Traffic capture started."); }
+                    if (!running) { lock (stateLock) { if (dnsLifetime.IsCancellationRequested) { dnsLifetime.Dispose(); dnsLifetime = new(); } } backend.Start(); running = true; startedAt = DateTimeOffset.Now; lastError = null; Activity("Info", "Traffic capture started."); }
                     return RpcResponse.Ok(State());
                 case "Stop":
-                    backend.Stop(); running = false; startedAt = null; dns.Clear(); Activity("Info", "Traffic capture stopped by user.");
+                    running = false; dnsLifetime.Cancel(); backend.Stop(); startedAt = null; dns.Clear(); Activity("Info", "Traffic capture stopped by user.");
                     return RpcResponse.Ok(State());
                 case "Recording": recording = request.Payload.Deserialize<ToggleRequest>(JsonDefaults.Options)!.Value; return RpcResponse.Ok(State());
                 case "Discovery": discovery = request.Payload.Deserialize<ToggleRequest>(JsonDefaults.Options)!.Value; return RpcResponse.Ok(State());
@@ -121,70 +127,88 @@ public sealed class EngineService : IDisposable
         }
         finally { mutations.Release(); }
     }
-    public bool RegisterManaged(int pid, string path, bool dnsReady)
-    {
-        using var process = Process.GetProcessById(pid);
-        lock (stateLock) managed[pid] = new(pid, path, process.StartTime.ToUniversalTime(), dnsReady);
-        return true;
-    }
     public AppConfiguration? DnsConfiguration => running ? rules.Configuration : null;
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     public WindowsProcessCatalog Processes => processes!;
-    public IReadOnlyList<ManagedProcess> ManagedDnsProcesses
-    {
-        get { lock (stateLock) return managed.Values.ToArray(); }
-    }
-    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-    public int RegisterDnsChild(int parentPid, int childPid, long creationFileTime)
-    {
-        var path = processes!.RegisterChild(parentPid, childPid, creationFileTime);
-        var snapshot = DnsConfiguration;
-        if (snapshot is null || IsUpstreamProcess(childPid, snapshot)) return 1;
-        return WindowsApplicationDns.AttachmentMode(snapshot, RuleEngine.Evaluate(snapshot, GetLineage(childPid, path), AppPlatform.Windows));
-    }
     private bool IsUpstreamProcess(int pid, AppConfiguration configuration) => pid == Environment.ProcessId ||
         OperatingSystem.IsWindows() && WindowsIntegration.FindLocalProxyProcesses(configuration.Proxies).Contains(pid);
     private IReadOnlyList<ApplicationProcess> GetLineage(int pid, string path)
         => OperatingSystem.IsWindows() ? processes!.GetLineage(pid, path) : [new(path)];
-    public int DnsPolicy(string path, int pid)
+    public async Task<(int Action, byte[] Response)> ResolveDnsAsync(int pid, string path, byte[] query, CancellationToken token)
     {
-        if (!running) return 1;
-        var snapshot = rules.Configuration;
-        if (IsUpstreamProcess(pid, snapshot)) return 1;
-        var decision = RuleEngine.Evaluate(snapshot, GetLineage(pid, path), AppPlatform.Windows);
-        return decision.Action == RoutingAction.Block ? 2 : decision.Action == RoutingAction.Direct || !decision.StrictDns ? 1 : 0;
+        var log = new DnsRequestLog("application-dns") { Pid = pid, Path = path };
+        try { return await ResolveDnsAsync(pid, path, query, token, log); }
+        catch (OperationCanceledException) when (!running)
+        { Activity("Info", "DNS request cancelled: reason=capture-stopped " + log.Describe()); throw; }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        { Activity("Error", log.Failure(error)); throw; }
     }
-    public async Task<(int Action, byte[] Response)> ResolveDnsAsync(int pid, string path, byte[] query, CancellationToken token, uint queryOptions = 0)
+    internal async Task<(int Action, byte[] Response)> ResolveDnsAsync(int pid, string path, byte[] query, CancellationToken token, DnsRequestLog log)
     {
-        if (!running) return (1, []);
-        AppConfiguration snapshot; RoutingDecision decision; ProxyServer? proxy; string password;
+        log.SetQuery(query);
+        log.Stage = "evaluate-policy";
+        if (!running) { Activity("Info", "DNS request bypassed: reason=capture-stopped " + log.Describe()); return (1, []); }
+        if (OperatingSystem.IsWindows() && WindowsDnsPolicy.SystemDnsReason(pid, path) is { } reason)
+        { Activity("Info", $"DNS request bypassed: reason={reason} " + log.Describe()); return (1, []); }
+        var snapshot = rules.Configuration;
+        if (IsUpstreamProcess(pid, snapshot)) { Activity("Info", "DNS request bypassed: reason=upstream-exclusion " + log.Describe()); return (1, []); }
+        var lineage = GetLineage(pid, path);
+        var decision = RuleEngine.Evaluate(snapshot, lineage, AppPlatform.Windows);
+        log.SetPolicy(snapshot, lineage, decision);
+        string password;
+        CancellationToken lifetime;
         lock (stateLock)
         {
-            snapshot = rules.Configuration;
-            if (IsUpstreamProcess(pid, snapshot)) return (1, []);
-            decision = RuleEngine.Evaluate(snapshot, GetLineage(pid, path), AppPlatform.Windows);
-            proxy = decision.Action == RoutingAction.Proxy ? snapshot.Proxies.Single(p => p.Id == decision.ProxyId) : null;
-            password = proxy is null ? "" : store.GetPassword(proxy.Id);
+            log.Stage = "load-proxy-credentials";
+            password = decision.Action == RoutingAction.Proxy && decision.StrictDns && decision.ProxyId is { } proxyId ? store.GetPassword(proxyId) : "";
+            lifetime = dnsLifetime.Token;
         }
-        if (decision.Action == RoutingAction.Direct || decision.Action == RoutingAction.Proxy && !decision.StrictDns) return (1, []);
+        if (decision.Action == RoutingAction.Direct || decision.Action == RoutingAction.Proxy && !decision.StrictDns)
+        { Activity("Info", "DNS request bypassed: reason=system-dns " + log.Describe()); return (1, []); }
+        log.Stage = "parse-query";
         var name = DnsWire.QuestionName(query);
         AddConnection(new(0, DateTimeOffset.Now, "DNS", path, pid, name, 53, decision.Action, decision.ProxyId, decision.RuleId, "Application DNS via DoH"));
-        if (decision.Action == RoutingAction.Block) return (2, DnsError(query, 5));
-        using var clientProcess = Process.GetProcessById(pid);
-        var response = await dns.ResolveAsync(query, pid, snapshot.ActiveProfileId, proxy!, password, snapshot.Settings, token,
-            path + ":" + clientProcess.StartTime.ToUniversalTime().Ticks, queryOptions);
-        return (0, response);
+        if (decision.Action == RoutingAction.Block)
+        { Activity("Warning", "DNS request blocked: rcode=5 dnsStatus=9005 " + log.Describe()); return (2, DnsError(query, 5)); }
+        log.Stage = "dns-capacity";
+        if (!dnsSlots.Wait(0))
+        { Activity("Warning", "DNS proxy capacity reached: returnedRcode=2 " + log.Describe()); return (0, DnsError(query, 2)); }
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime);
+            timeout.CancelAfter(TimeSpan.FromSeconds(6));
+            log.Stage = "identify-process-generation";
+            using var clientProcess = Process.GetProcessById(pid);
+            var identity = path + ":" + clientProcess.StartTime.ToUniversalTime().Ticks;
+            log.Stage = "resolve-doh";
+            var proxy = snapshot.Proxies.Single(p => p.Id == decision.ProxyId);
+            var response = await dns.ResolveAsync(query, pid, snapshot.ActiveProfileId, proxy, password, snapshot.Settings, timeout.Token,
+                identity);
+            var rcode = response[3] & 15;
+            if (rcode != 0)
+            {
+                var status = rcode switch { 1 => "FORMERR", 2 => "SERVFAIL", 3 => "NXDOMAIN", 4 => "NOTIMP", 5 => "REFUSED", _ => "DNS_ERROR" };
+                Activity("Warning", $"DNS upstream response: rcode={rcode} dnsStatus={9000 + rcode} status={status} {log.Describe()}");
+            }
+            return (0, response);
+        }
+        finally { dnsSlots.Release(); }
     }
     private byte[] ResolveWire(int pid, byte[] query)
     {
-        using var process = Process.GetProcessById(pid);
-        var path = process.MainModule?.FileName ?? throw new InvalidOperationException("Cannot identify DNS client.");
+        var log = new DnsRequestLog("packet-dns") { Pid = pid };
+        log.SetQuery(query);
         try
         {
-            var result = ResolveDnsAsync(pid, path, query, CancellationToken.None).GetAwaiter().GetResult();
-            return result.Response.Length > 0 ? result.Response : DnsError(query, 2);
+            using var process = Process.GetProcessById(pid);
+            var path = process.MainModule?.FileName ?? throw new InvalidOperationException("Cannot identify DNS client.");
+            log.Path = path;
+            var result = ResolveDnsAsync(pid, path, query, CancellationToken.None, log).GetAwaiter().GetResult();
+            return result.Response;
         }
-        catch (Exception error) { Activity("Error", "DNS request failed: " + error.Message); return DnsError(query, 2); }
+        catch (OperationCanceledException) when (!running)
+        { Activity("Info", "DNS request cancelled: reason=capture-stopped " + log.Describe()); return DnsError(query, 2); }
+        catch (Exception error) { Activity("Error", log.Failure(error)); return DnsError(query, 2); }
     }
     public static byte[] DnsError(byte[] query, int code)
     {
@@ -207,12 +231,12 @@ public sealed class EngineService : IDisposable
     {
         if (store.Configuration.Settings.StartProxyOnLaunch) await DispatchAsync(RpcRequest.Create("Start"), token);
     }
-    public void Dispose() { backend.Dispose(); mutations.Dispose(); }
+    public void Dispose() { dnsLifetime.Cancel(); backend.Dispose(); mutations.Dispose(); }
 }
 
 internal sealed class UnavailableBackend : ITrafficBackend
 {
-    public BackendCapabilities Capabilities => new(false, false, false, "Linux", "The Linux capture and DNS backends are scheduled for phase two.");
+    public BackendCapabilities Capabilities => new(false, false, "Linux", "The Linux capture and DNS backends are scheduled for phase two.");
     public event Action<ConnectionEvent>? Connection { add { } remove { } }
     public event Action<string>? Log { add { } remove { } }
     public void Apply(AppConfiguration configuration, Func<Guid, string> getPassword) { }

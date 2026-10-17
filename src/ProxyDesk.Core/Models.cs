@@ -92,14 +92,13 @@ public sealed record ApplicationProcess(string ExecutablePath, string? ScriptPat
 public sealed record ConnectionEvent(long Sequence, DateTimeOffset Time, string Protocol, string ProcessPath,
     int Pid, string Destination, int Port, RoutingAction Action, Guid? ProxyId, Guid? RuleId, string Detail);
 public sealed record ActivityEvent(long Sequence, DateTimeOffset Time, string Level, string Message);
-public sealed record ManagedProcess(int Pid, string Path, DateTimeOffset StartedAt, bool DnsReady);
 public sealed record ProxyTestResult(Guid ProxyId, bool Success, double? LatencyMs, bool? UdpSupported, string Detail);
-public sealed record BackendCapabilities(bool TrafficCapture, bool StrictDns, bool Ipv6, string Platform, string Detail);
+public sealed record BackendCapabilities(bool TrafficCapture, bool Ipv6, string Platform, string Detail);
 public sealed record ServiceRuntime(int ProcessId, long StartTimeUtcTicks, string DataDirectory, bool IsElevated, bool IsWindowsService);
 public sealed record ServiceState(AppConfiguration Configuration, bool Running, DateTimeOffset? StartedAt,
     string? Ssid, bool Recording, bool Discovery, string? LastError, BackendCapabilities Capabilities,
     IReadOnlyList<ConnectionEvent> Connections, IReadOnlyList<ActivityEvent> Activities,
-    IReadOnlyList<ManagedProcess> ManagedProcesses, IReadOnlyList<ProxyTestResult> ProxyTests, ServiceRuntime? Runtime = null);
+    IReadOnlyList<ProxyTestResult> ProxyTests, ServiceRuntime? Runtime = null);
 
 public static class JsonDefaults
 {

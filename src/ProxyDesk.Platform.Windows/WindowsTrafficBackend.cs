@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
@@ -23,7 +24,7 @@ public sealed class WindowsTrafficBackend : ITrafficBackend
     private bool loaded;
     private bool running;
     private string? nativeError;
-    private string dependencyDescription = "WFP / WinDivert; application DNS is attached automatically.";
+    private string dependencyDescription = "WinDivert; network DNS without process injection.";
     private nint dependencyHandle;
     private long sequence;
     public event Action<ConnectionEvent>? Connection;
@@ -55,12 +56,8 @@ public sealed class WindowsTrafficBackend : ITrafficBackend
         { nativeError = error.Message; }
     }
 
-    public BackendCapabilities Capabilities => new(loaded,
-        File.Exists(Path.Combine(AppContext.BaseDirectory, "ProxyDeskDns32.dll")) &&
-        File.Exists(Path.Combine(AppContext.BaseDirectory, "ProxyDeskDns64.dll")) &&
-        File.Exists(Path.Combine(AppContext.BaseDirectory, "ProxyDesk.Injector32.exe")) &&
-        File.Exists(Path.Combine(AppContext.BaseDirectory, "ProxyDesk.Injector64.exe")), true, "Windows",
-        nativeError ?? dependencyDescription);
+    public BackendCapabilities Capabilities => new(loaded, true, "Windows",
+        nativeError ?? dependencyDescription + " 使用无注入网络 DNS；系统代发查询保留系统解析，不保证全部 DNS 按应用分流。");
 
     public void Apply(AppConfiguration configuration, Func<Guid, string> getPassword)
     {
@@ -90,11 +87,24 @@ public sealed class WindowsTrafficBackend : ITrafficBackend
     private int Decide(uint pid, string path, string destination, ushort port, int udp, out uint proxyId)
     {
         proxyId = 0;
+        var started = Stopwatch.GetTimestamp();
+        var stage = "upstream-exclusion";
+        double upstreamMs = 0, lineageMs = 0, recordMs = 0;
         try
         {
             var snapshot = rules.Configuration;
             if (pid == Environment.ProcessId || WindowsIntegration.FindLocalProxyProcesses(snapshot.Proxies).Contains((int)pid)) return 1;
-            var decision = RuleEngine.Evaluate(snapshot, getLineage((int)pid, path), AppPlatform.Windows);
+            if (port == 53 && WindowsDnsPolicy.SystemDnsReason((int)pid, path) is { } reason)
+            {
+                Log?.Invoke($"DNS packet policy: pid={pid} path={System.Text.Json.JsonSerializer.Serialize(path)} server=[{destination}]:53 action=Direct reason={reason}");
+                return 1;
+            }
+            upstreamMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            stage = "process-lineage";
+            var lineage = getLineage((int)pid, path);
+            lineageMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds - upstreamMs;
+            var decision = RuleEngine.Evaluate(snapshot, lineage, AppPlatform.Windows);
+            stage = "routing-policy";
             var action = decision.Action;
             var detail = "";
             if (port == 53 && action == RoutingAction.Proxy && !decision.StrictDns) { action = RoutingAction.Direct; detail = "The rule uses system DNS."; }
@@ -108,12 +118,29 @@ public sealed class WindowsTrafficBackend : ITrafficBackend
                 else if (!currentProxyIds.TryGetValue((proxy.Id, proxy.Revision), out proxyId))
                 { action = RoutingAction.Block; detail = "The selected proxy is unavailable."; }
             }
+            if (port == 53)
+            {
+                var rule = snapshot.ActiveProfile.Rules.SingleOrDefault(item => item.Id == decision.RuleId);
+                Log?.Invoke($"DNS packet policy: pid={pid} path={System.Text.Json.JsonSerializer.Serialize(path)} server=[{destination}]:{port}" +
+                    $" protocol={(udp != 0 ? "UDP" : "TCP")} action={action} strictDns={decision.StrictDns} profileId={snapshot.ActiveProfileId}" +
+                    $" ruleId={decision.RuleId?.ToString() ?? "none"} rule={System.Text.Json.JsonSerializer.Serialize(rule?.Name)}" +
+                    $" match={(rule is null ? "profile-default" : "rule")} proxyId={decision.ProxyId?.ToString() ?? "none"} detail={System.Text.Json.JsonSerializer.Serialize(detail)}");
+            }
+            stage = "record-connection";
+            var recordStarted = Stopwatch.GetTimestamp();
             Connection?.Invoke(new(Interlocked.Increment(ref sequence), DateTimeOffset.Now,
                 port == 53 ? "DNS" : udp != 0 ? "UDP" : "TCP", path, (int)pid, destination, port,
                 action, decision.ProxyId, decision.RuleId, detail));
+            recordMs = Stopwatch.GetElapsedTime(recordStarted).TotalMilliseconds;
             return action switch { RoutingAction.Proxy => 0, RoutingAction.Direct => 1, _ => 2 };
         }
-        catch (Exception error) { Log?.Invoke("Policy evaluation failed: " + error.Message); return 2; }
+        catch (Exception error)
+        { Log?.Invoke($"Policy evaluation failed: pid={pid} path={System.Text.Json.JsonSerializer.Serialize(path)} destination=[{destination}]:{port} stage={stage} error={error}"); return 2; }
+        finally
+        {
+            var elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            if (elapsed >= 100) Log?.Invoke($"Traffic policy delayed: pid={pid} path={System.Text.Json.JsonSerializer.Serialize(path)} destination=[{destination}]:{port} stage={stage} elapsedMs={elapsed:F0} upstreamMs={upstreamMs:F0} lineageMs={lineageMs:F0} recordMs={recordMs:F0}");
+        }
     }
 
     private int Resolve(uint pid, nint query, int length, nint response, int capacity)
@@ -122,6 +149,7 @@ public sealed class WindowsTrafficBackend : ITrafficBackend
         {
             var bytes = new byte[length]; Marshal.Copy(query, bytes, 0, length);
             var result = resolveDns((int)pid, bytes);
+            if (result.Length == 0) return -1; // The policy changed to direct while the request was queued.
             if (result.Length > capacity) return 0;
             Marshal.Copy(result, 0, response, result.Length); return result.Length;
         }
@@ -142,14 +170,15 @@ public sealed class WindowsTrafficBackend : ITrafficBackend
         if (running) return;
         if (WindowsIntegration.FindLocalProxyProcesses([new ProxyServer { Host = "127.0.0.1", Port = 34010 }]).Any(pid => pid != Environment.ProcessId))
             throw new InvalidOperationException("本地转发端口 34010 已被其他程序占用。请先停止原版 ProxyBridge 的代理，再启用本工具。");
+        // Old DLLs already loaded in applications must remain bypassed after upgrading.
+        if (!DisableLegacyDns()) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
         if (!NativeStart()) throw new InvalidOperationException("WinDivert could not start. Check elevation, driver availability and the activity log.");
-        if (!SetDnsBypass(false)) { var error = Marshal.GetLastWin32Error(); NativeStop(); throw new System.ComponentModel.Win32Exception(error); }
         running = true;
     }
     public void Stop()
     {
         if (!running) return;
-        if (!SetDnsBypass(true)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        if (!DisableLegacyDns()) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
         NativeStop(); running = false;
     }
     public void Dispose() { Stop(); foreach (var bridge in bridges) bridge.Dispose(); if (dependencyHandle != 0) { FreeLibrary(dependencyHandle); dependencyHandle = 0; } }
@@ -163,8 +192,8 @@ public sealed class WindowsTrafficBackend : ITrafficBackend
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void LogCallback([MarshalAs(UnmanagedType.LPUTF8Str)] string message);
     [DllImport("ProxyDeskCore", EntryPoint = "ProxyDesk_SetPolicyCallback", CallingConvention = CallingConvention.Cdecl)] private static extern void SetPolicyCallback(PolicyCallback callback);
     [DllImport("ProxyDeskCore", EntryPoint = "ProxyDesk_SetDnsCallback", CallingConvention = CallingConvention.Cdecl)] private static extern void SetDnsCallback(DnsCallback callback);
-    [DllImport("ProxyDeskCore", EntryPoint = "ProxyDesk_SetDnsBypass", CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetDnsBypass([MarshalAs(UnmanagedType.Bool)] bool enabled);
+    [DllImport("ProxyDeskCore", EntryPoint = "ProxyDesk_DisableLegacyDns", CallingConvention = CallingConvention.Cdecl, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)] private static extern bool DisableLegacyDns();
     [DllImport("ProxyDeskCore", EntryPoint = "ProxyBridge_SetLogCallback", CallingConvention = CallingConvention.Cdecl)] private static extern void SetLogCallback(LogCallback callback);
     [DllImport("ProxyDeskCore", EntryPoint = "ProxyBridge_AddProxyConfig", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)] private static extern uint AddProxyConfig(int kind,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string host, ushort port, [MarshalAs(UnmanagedType.LPUTF8Str)] string user, [MarshalAs(UnmanagedType.LPUTF8Str)] string password, [MarshalAs(UnmanagedType.Bool)] bool sendDomain);

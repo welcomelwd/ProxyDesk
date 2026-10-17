@@ -7,7 +7,6 @@ namespace ProxyDesk.Core;
 public sealed class ServiceClient
 {
     public const string ControlPipe = "ProxyDesk.Control.v1";
-    public const string DnsPipe = "ProxyDesk.Dns.v1";
     public async Task<RpcResponse> CallAsync(string operation, object? payload = null, CancellationToken cancellationToken = default)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

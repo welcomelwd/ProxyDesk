@@ -55,12 +55,16 @@ public sealed class WindowsProcessCatalog
         }
     }
 
-    private Node? ReadOne(int pid)
+    private static Node ReadOne(Process process, long generation)
     {
-        using var query = new ManagementObjectSearcher($"SELECT ProcessId,ParentProcessId,CreationDate,ExecutablePath,CommandLine FROM Win32_Process WHERE ProcessId={pid}");
-        using var results = query.Get();
-        foreach (var item in results) using (item) return Read(item);
-        return null;
+        // This path runs on the packet thread. WMI queries here can stall all captured traffic.
+        var handle = process.SafeHandle;
+        var path = new StringBuilder(32768); var length = path.Capacity;
+        if (!QueryFullProcessImageName(handle, 0, path, ref length)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        var status = NtQueryInformationProcess(handle, 0, out var information, Marshal.SizeOf<ProcessBasicInformation>(), out _);
+        if (status != 0) throw new System.ComponentModel.Win32Exception((int)RtlNtStatusToDosError(status));
+        var script = WindowsRuleTargets.FindProcessScript(path.ToString(), ReadCommandLine(handle));
+        return new(process.Id, (int)information.ParentProcessId, generation, new(path.ToString(), script));
     }
 
     private Node? GetNode(int pid, HashSet<int> visited)
@@ -69,8 +73,7 @@ public sealed class WindowsProcessCatalog
         using var process = Process.GetProcessById(pid);
         var generation = process.StartTime.ToUniversalTime().Ticks / 10;
         if (nodes.TryGetValue(pid, out var existing) && existing.Generation == generation) return existing;
-        var node = ReadOne(pid);
-        if (node is null) return null;
+        var node = ReadOne(process, generation);
         nodes[pid] = node;
         if (node.ParentPid != pid)
         {
@@ -96,28 +99,6 @@ public sealed class WindowsProcessCatalog
         }
     }
 
-    public string RegisterChild(int parentPid, int childPid, long creationFileTime)
-    {
-        using var process = Process.GetProcessById(childPid);
-        if (process.StartTime.ToUniversalTime().ToFileTimeUtc() != creationFileTime) throw new InvalidDataException("Child process identity changed.");
-        var status = NtQueryInformationProcess(process.SafeHandle, 0, out var information, Marshal.SizeOf<ProcessBasicInformation>(), out _);
-        if (status != 0) throw new InvalidOperationException($"Cannot read child process identity: 0x{status:X8}.");
-        if (information.ParentProcessId != parentPid) throw new InvalidDataException("The reported process is not a child of the caller.");
-        var path = new StringBuilder(32768); var length = path.Capacity;
-        if (!QueryFullProcessImageName(process.SafeHandle, 0, path, ref length)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
-        var script = WindowsRuleTargets.FindProcessScript(path.ToString(), ReadCommandLine(process.SafeHandle));
-        lock (gate)
-        {
-            // Suspended children are not yet visible through WMI. Capture their identity before resuming them.
-            var child = new Node(childPid, parentPid, process.StartTime.ToUniversalTime().Ticks / 10, new(path.ToString(), script));
-            var parent = GetNode(parentPid, []) ?? throw new InvalidDataException("Cannot identify the parent process.");
-            if (parent.Generation > child.Generation) throw new InvalidDataException("The reported parent process was created after the child.");
-            child.Parent = parent;
-            nodes[childPid] = child;
-        }
-        return path.ToString();
-    }
-
     private static string ReadCommandLine(SafeProcessHandle process)
     {
         const int processCommandLineInformation = 60;
@@ -126,7 +107,7 @@ public sealed class WindowsProcessCatalog
         try
         {
             var status = NtQueryProcessBuffer(process, processCommandLineInformation, buffer, size, out _);
-            if (status != 0) throw new InvalidOperationException($"Cannot read child command line: 0x{status:X8}.");
+            if (status != 0) throw new System.ComponentModel.Win32Exception((int)RtlNtStatusToDosError(status), $"Cannot read process command line: 0x{status:X8}.");
             var text = Marshal.PtrToStructure<UnicodeString>(buffer);
             return Marshal.PtrToStringUni(text.Buffer, text.Length / 2)!;
         }
@@ -145,6 +126,7 @@ public sealed class WindowsProcessCatalog
     }
     [DllImport("ntdll.dll")] private static extern int NtQueryInformationProcess(SafeProcessHandle process, int informationClass,
         out ProcessBasicInformation information, int length, out int returnedLength);
+    [DllImport("ntdll.dll")] private static extern uint RtlNtStatusToDosError(int status);
     [DllImport("kernel32.dll", EntryPoint = "QueryFullProcessImageNameW", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)] private static extern bool QueryFullProcessImageName(SafeProcessHandle process, int flags, StringBuilder path, ref int length);
 }

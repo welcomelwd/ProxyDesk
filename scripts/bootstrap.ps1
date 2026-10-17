@@ -20,7 +20,9 @@ if (-not (Test-Path (Join-Path $coreRoot 'Windows/src/ProxyBridge.c'))) {
     Expand-Archive $vendorZip -DestinationPath (Join-Path $toolsRoot 'proxybridge-extract') -Force
     $sourceRoot = Join-Path $toolsRoot 'proxybridge-extract/ProxyBridge-d697164b836f0d3f897128774d3cb72e54770e74'
     New-Item -ItemType Directory -Force -Path $coreRoot | Out-Null
-    Copy-Item -LiteralPath (Join-Path $sourceRoot 'Windows') -Destination $coreRoot -Recurse
+    $coreSources = Join-Path $coreRoot 'Windows/src'
+    New-Item -ItemType Directory -Force -Path $coreSources | Out-Null
+    Get-ChildItem -LiteralPath (Join-Path $sourceRoot 'Windows/src') -File | Where-Object Extension -in @('.c', '.h') | Copy-Item -Destination $coreSources
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'LICENSE') -Destination $coreRoot
 }
 $driverRoot = Join-Path $projectRoot 'native/vendor/windivert'
@@ -41,13 +43,5 @@ if (-not (Test-Path (Join-Path $driverRoot 'include/windivert.h'))) {
 }
 if (-not $SkipDriver -and -not (Test-Path (Join-Path $driverRoot 'source-v2.2.2.zip'))) {
     Invoke-WebRequest 'https://codeload.github.com/basil00/WinDivert/zip/refs/tags/v2.2.2' -OutFile (Join-Path $driverRoot 'source-v2.2.2.zip')
-}
-$detoursRoot = Join-Path $projectRoot 'native/vendor/detours'
-if (-not (Test-Path (Join-Path $detoursRoot 'src/detours.h'))) {
-    $detoursZip = Join-Path $toolsRoot 'detours.zip'
-    Invoke-WebRequest 'https://codeload.github.com/microsoft/Detours/zip/refs/tags/v4.0.1' -OutFile $detoursZip
-    Expand-Archive $detoursZip -DestinationPath (Join-Path $toolsRoot 'detours-extract') -Force
-    New-Item -ItemType Directory -Force -Path $detoursRoot | Out-Null
-    Copy-Item (Join-Path $toolsRoot 'detours-extract/Detours-4.0.1/*') $detoursRoot -Recurse -Force
 }
 Write-Output 'BOOTSTRAP_PASS'

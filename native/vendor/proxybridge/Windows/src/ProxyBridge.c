@@ -463,8 +463,9 @@ DWORD WINAPI packet_processor(LPVOID arg)
 
                 RuleAction action6;
                 DWORD pid6 = 0;
+                PROCESS_IDENTITY tcp_owner6 = {0};
                 UINT32 proxy_config_id6 = 0;
-                action6 = check_process_rule_v6((const UINT8*)ipv6_header->SrcAddr, sp, (const UINT8*)ipv6_header->DstAddr, dp, FALSE, &pid6, &proxy_config_id6, NULL);
+                action6 = check_process_rule_v6((const UINT8*)ipv6_header->SrcAddr, sp, (const UINT8*)ipv6_header->DstAddr, dp, FALSE, &pid6, &proxy_config_id6, &tcp_owner6);
 
                 // ::1 IPv6 loopback - use  same "Localhost via Proxy" toggle as IPv4 127.
                 if (action6 == RULE_ACTION_PROXY && !g_localhost_via_proxy)
@@ -533,7 +534,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
                 }
                 else if (action6 == RULE_ACTION_PROXY)
                 {
-                    add_connection_v6(sp, FALSE, (const UINT8*)ipv6_header->SrcAddr, (const UINT8*)ipv6_header->DstAddr, dp, proxy_config_id6, NULL);
+                    add_connection_v6(sp, FALSE, (const UINT8*)ipv6_header->SrcAddr, (const UINT8*)ipv6_header->DstAddr, dp, proxy_config_id6, &tcp_owner6);
                     port_set_decided(sp, TRUE);
                     tcp_header->DstPort = htons(g_local_relay_port);
 
@@ -915,7 +916,8 @@ DWORD WINAPI packet_processor(LPVOID arg)
                 DWORD pid = 0;
                 UINT32 proxy_config_id = 0;
 
-                action = check_process_rule(src_ip, src_port, orig_dest_ip, orig_dest_port, FALSE, &pid, &proxy_config_id, NULL);
+                PROCESS_IDENTITY tcp_owner = {0};
+                action = check_process_rule(src_ip, src_port, orig_dest_ip, orig_dest_port, FALSE, &pid, &proxy_config_id, &tcp_owner);
 
                 BYTE orig_dest_first_octet = (orig_dest_ip >> 0) & 0xFF;
                 if (action == RULE_ACTION_PROXY && !g_localhost_via_proxy && orig_dest_first_octet == 127)
@@ -986,7 +988,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
                 }
                 else if (action == RULE_ACTION_PROXY)
             {
-                add_connection(src_port, FALSE, src_ip, orig_dest_ip, orig_dest_port, proxy_config_id, NULL);
+                add_connection(src_port, FALSE, src_ip, orig_dest_ip, orig_dest_port, proxy_config_id, &tcp_owner);
                 // Mark this port as decided (not direct) so subsequent packets from
                 // the same source port skip the rule check.  The is_connection_tracked
                 // branch above handles the actual per-packet redirect.
@@ -1267,6 +1269,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
         return FALSE;
     }
 
+    pd_dns_start();
     // Socket-layer events give the owner PID of each new connection without a table scan.
     // Optional: if it cannot be opened the lookups fall back to the table.
     sockmap_start();
@@ -1300,6 +1303,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
                     packet_thread[j] = NULL;
                 }
             }
+            pd_dns_stop();
             WinDivertClose(windivert_handle);
             windivert_handle = INVALID_HANDLE_VALUE;
             WaitForSingleObject(proxy_thread, INFINITE);
@@ -1349,6 +1353,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_Stop(void)
 
     running = FALSE;
 
+    pd_dns_stop();
     sockmap_stop();
 
     if (windivert_handle != INVALID_HANDLE_VALUE)

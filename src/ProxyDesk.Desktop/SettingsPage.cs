@@ -41,7 +41,7 @@ internal sealed partial class Pages
                 SettingsRow("后台启动时开启代理", autoStart, "后台服务启动后，自动启用当前配置。")),
             NetworkSettings(),
             SettingsGroup("DNS", SettingsRow("DoH 服务器", CompactButton("DNS 设置…", "edit", EditDnsSettingsAsync),
-                "规则开启“DNS 解析走代理”时使用此服务器，默认开启。\n" + vm.Configuration.Settings.DohUrl)),
+                "无进程注入：仅处理归属明确的应用 DNS。Windows 系统代发查询保持系统解析。\n" + vm.Configuration.Settings.DohUrl)),
             SettingsGroup("备份与诊断", SettingsRow("配置备份", Horizontal(CompactButton("导入…", "import", ImportConfigurationAsync), CompactButton("导出…", "export", ExportConfigurationAsync)), "导出文件默认不包含代理密码。"),
                 SettingsRow("诊断日志", CompactButton("收集日志…", "export", CollectDiagnosticsAsync))));
         general.Spacing = 20;
@@ -95,7 +95,7 @@ internal sealed partial class Pages
                 SettingsRow("发行方式", Text(PortableSession.Enabled ? "Windows 便携版" : OperatingSystem.IsWindows() ? "Windows 安装版" : "Linux 预览版", 12, "#85858B")),
                 SettingsRow("配置目录", Live(nameof(vm.DataDirectoryText), 12, "#85858B")),
                 SettingsRow("更新方式", Text(PortableSession.Enabled ? "退出后解压新版，保留 Data 文件夹" : "运行新版安装包", 12, "#85858B"))),
-            Card(Vertical(Text("Windows 完整包已包含运行时、WinDivert 和 DNS 组件。", 12, "#85858B"),
+            Card(Vertical(Text("Windows 完整包已包含运行时和 WinDivert，无需 DNS 注入组件。", 12, "#85858B"),
                 Text("界面和共享核心兼容 Linux；Linux 网络接管将在第二阶段提供。", 12, "#85858B"))));
     }
 
@@ -104,7 +104,7 @@ internal sealed partial class Pages
         var url = ProxyInput(vm.Configuration.Settings.DohUrl, "DohUrlInput", "https://cloudflare-dns.com/dns-query");
         var bootstrap = ProxyInput(vm.Configuration.Settings.DohBootstrapIp, "DohBootstrapInput", "1.1.1.1");
         var error = new TextBlock { IsVisible = false, Foreground = Color("#F05E59"), TextWrapping = TextWrapping.Wrap, FontSize = 12 };
-        var explanation = Text("查询通过应用所选代理发送；证书按 DoH 地址校验，解析失败时返回错误。", 12, "#85858B"); explanation.TextWrapping = TextWrapping.Wrap;
+        var explanation = Text("仅将应用自己发出、能识别归属的普通 DNS 查询经所选代理转发到 DoH。Windows 公共 DNS 服务代发的查询保留系统解析；应用自带的加密 DNS 按普通连接规则处理。代理 DNS 失败只返回该查询的错误，不自动切换直连。", 12, "#85858B"); explanation.TextWrapping = TextWrapping.Wrap;
         var fields = Vertical(SurfaceGroup(ProxyFormRow("DoH HTTPS 地址", url, 140), ProxyFormRow("引导 IP", bootstrap, 140)), explanation, error);
         await StyledEditorAsync("DNS 设置", fields, async () =>
         {

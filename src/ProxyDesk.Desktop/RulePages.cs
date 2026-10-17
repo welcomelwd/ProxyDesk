@@ -182,10 +182,10 @@ internal sealed partial class Pages
         var actions = ActionSegments(rule.Action);
         var descendants = MonitorSwitch("同时应用于派生进程", rule.IncludeDescendants);
         descendants.HorizontalAlignment = HorizontalAlignment.Right;
-        ToolTip.SetTip(descendants, "此程序启动的子进程和后续派生进程也按本规则处理；规则仍按列表顺序匹配。");
+        ToolTip.SetTip(descendants, "按观察到的父子进程关系继承规则。启动后立即退出的启动器可能无法追踪，可为目标程序单独添加规则。");
         var dns = MonitorSwitch("DNS 解析走代理", rule.StrictDns);
         dns.HorizontalAlignment = HorizontalAlignment.Right;
-        ToolTip.SetTip(dns, "开启：DNS 查询经所选代理发送到 DoH 服务器；关闭：使用系统 DNS，其他流量仍按规则处理。");
+        ToolTip.SetTip(dns, "开启：仅将应用自己发出的普通 DNS 查询经代理转发；系统代发查询仍使用系统 DNS。关闭：普通 DNS 使用系统解析。此功能不向应用加载 DLL。");
         var proxies = vm.Configuration.Proxies.ToArray();
         var proxy = new ComboBox { ItemsSource = proxies.Select(item => item.Name).ToArray(), SelectedIndex = Array.FindIndex(proxies, item => item.Id == rule.ProxyId),
             PlaceholderText = "选择代理…", MinWidth = 190, HorizontalAlignment = HorizontalAlignment.Right };
@@ -207,7 +207,8 @@ internal sealed partial class Pages
             profileChecks.Add(profile.Id, check); targetRows.Children.Add(check);
         }
         var fields = Vertical(dropZone, pathSection, SurfaceGroup(ProxyFormRow("动作", actions.Control), ProxyFormRow("代理服务器", proxy),
-            ProxyFormRow("同时应用于派生进程", descendants), ProxyFormRow("DNS 解析走代理", dns)),
+            ProxyFormRow("同时应用于派生进程", descendants), ProxyFormRow("DNS 解析走代理", dns),
+            Text("仅支持归属明确的应用 DNS；Windows 系统代发查询保持系统解析。", 11, "#85858B")),
             SurfaceGroup(advanced), new Border { Child = targetRows, Background = Color("#FFFFFF"), Padding = new Thickness(14), CornerRadius = new CornerRadius(9) }, error);
         await StyledEditorAsync(existing is null ? "添加规则" : "编辑规则", fields, async () =>
         {

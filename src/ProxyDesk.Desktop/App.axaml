@@ -18,7 +18,6 @@
     <Style Selector="DataGridColumnHeader"><Setter Property="Background" Value="{DynamicResource SurfaceBackground}" /><Setter Property="Foreground" Value="{DynamicResource SecondaryForeground}" /><Setter Property="FontSize" Value="13" /><Setter Property="Padding" Value="14,9" /></Style>
     <Style Selector="DataGridCell"><Setter Property="Padding" Value="14,8" /></Style>
     <Style Selector="ToggleSwitch"><Setter Property="OnContent" Value="" /><Setter Property="OffContent" Value="" /></Style>
-    <Style Selector="Border.card"><Setter Property="CornerRadius" Value="12" /><Setter Property="Padding" Value="20" /></Style>
     <StyleInclude Source="avares://ProxyDesk.Desktop/ProxyStyles.axaml" />
   </Application.Styles>
 </Application>

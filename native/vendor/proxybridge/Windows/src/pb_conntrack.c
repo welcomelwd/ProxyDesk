@@ -1,5 +1,15 @@
 #include "pb_internal.h"
 
+DWORD get_tracked_tcp_pid(UINT16 src_port, BOOL is_ipv6)
+{
+    PROCESS_IDENTITY owner = {0}, current = {0};
+    AcquireSRWLockShared(&lock);
+    for (CONNECTION_INFO *c = connection_hash_table[src_port % CONNECTION_HASH_SIZE]; c; c = c->next)
+        if (c->src_port == src_port && !c->is_udp && c->is_ipv6 == is_ipv6) { owner = c->owner; break; }
+    ReleaseSRWLockShared(&lock);
+    return get_process_identity(owner.pid, &current) && current.created == owner.created ? owner.pid : 0;
+}
+
 // Connection tracking: forward table, reverse index, logged connections.
 BOOL connection_owner_matches(const CONNECTION_INFO *connection)
 {

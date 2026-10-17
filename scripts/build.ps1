@@ -17,16 +17,21 @@ try {
         $publishDirectory = Join-Path $projectRoot 'artifacts/windows-x64'
         Dotnet @('publish','src/ProxyDesk.Desktop/ProxyDesk.Desktop.csproj','-c','Release','-r','win-x64','--self-contained','true','-o',$publishDirectory,'-v','minimal')
         Dotnet @('publish','src/ProxyDesk.Service/ProxyDesk.Service.csproj','-c','Release','-r','win-x64','--self-contained','true','-o',$publishDirectory,'-v','minimal')
-        foreach ($name in @('ProxyDeskCore.dll','ProxyDeskDns32.dll','ProxyDeskDns64.dll','ProxyDesk.Injector32.exe','ProxyDesk.Injector64.exe','ProxyDesk.Launcher.exe','WinDivert.dll','WinDivert64.sys')) {
+        foreach ($name in @('ProxyDeskCore.dll','WinDivert.dll','WinDivert64.sys')) {
             $nativeFile = Join-Path $projectRoot "artifacts/native/$name"
             if (Test-Path -LiteralPath $nativeFile) { Copy-Item -LiteralPath $nativeFile -Destination $publishDirectory -Force }
+        }
+        foreach ($name in @('ProxyDeskDns32.dll','ProxyDeskDns64.dll','ProxyDesk.Injector32.exe','ProxyDesk.Injector64.exe','ProxyDesk.Launcher.exe')) {
+            $legacyFile = Join-Path $publishDirectory $name
+            if (Test-Path -LiteralPath $legacyFile) { Remove-Item -LiteralPath $legacyFile }
         }
         Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination $publishDirectory -Force
         Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md') -Destination $publishDirectory -Force
         New-Item -ItemType Directory -Force -Path (Join-Path $publishDirectory 'licenses') | Out-Null
         Copy-Item 'licenses/*' (Join-Path $publishDirectory 'licenses') -Force
         Copy-Item 'native/vendor/proxybridge/LICENSE' (Join-Path $publishDirectory 'licenses/ProxyBridge-MIT.txt') -Force
-        Copy-Item 'native/vendor/detours/LICENSE.md' (Join-Path $publishDirectory 'licenses/Detours-MIT.txt') -Force
+        $legacyLicense = Join-Path $publishDirectory 'licenses/Detours-MIT.txt'
+        if (Test-Path -LiteralPath $legacyLicense) { Remove-Item -LiteralPath $legacyLicense }
         Copy-Item 'native/vendor/windivert/LICENSE' (Join-Path $publishDirectory 'licenses/WinDivert-license.txt') -Force
         Copy-Item 'native/vendor/windivert/source-v2.2.2.zip' (Join-Path $publishDirectory 'licenses/WinDivert-source-v2.2.2.zip') -Force
         Copy-Item 'scripts/run-preview.cmd' $publishDirectory -Force

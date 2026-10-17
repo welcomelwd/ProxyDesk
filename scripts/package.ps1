@@ -2,9 +2,12 @@ param([switch]$PreviewWithoutDriver, [string]$MakeNsis)
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $publishDirectory = Join-Path $projectRoot 'artifacts/windows-x64'
+foreach ($name in @('ProxyDeskDns32.dll','ProxyDeskDns64.dll','ProxyDesk.Injector32.exe','ProxyDesk.Injector64.exe','ProxyDesk.Launcher.exe')) {
+    if (Test-Path -LiteralPath (Join-Path $publishDirectory $name)) { throw 'Publish the network-only build before packaging; legacy DNS components remain.' }
+}
 if (-not (Test-Path (Join-Path $publishDirectory 'ProxyDesk.Desktop.exe'))) { throw 'Run scripts/build.ps1 -Publish first.' }
 if (-not $PreviewWithoutDriver) {
-    foreach ($name in @('ProxyDeskCore.dll','ProxyDeskDns32.dll','ProxyDeskDns64.dll','ProxyDesk.Injector32.exe','ProxyDesk.Injector64.exe')) {
+    foreach ($name in @('ProxyDeskCore.dll')) {
         if (-not (Test-Path -LiteralPath (Join-Path $publishDirectory $name))) { throw ('The full installer requires the network component: ' + $name) }
     }
     $driverHashes = @{

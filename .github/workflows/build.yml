@@ -16,16 +16,11 @@ jobs:
       - run: dotnet run --project tests/ProxyDesk.Tests/ProxyDesk.Tests.csproj -c Release
       - if: runner.os == 'Windows'
         run: dotnet run --project tests/ProxyDesk.ServiceTests/ProxyDesk.ServiceTests.csproj -c Release
-  native-dns:
+  native-network:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.402
       - shell: pwsh
-        run: ./scripts/bootstrap.ps1 -SkipSdk -SkipDriver
+        run: ./scripts/bootstrap.ps1 -SkipSdk
       - shell: pwsh
-        run: ./scripts/build-native.ps1 -DnsTests
-      - run: dotnet run --project tests/ProxyDesk.Tests/ProxyDesk.Tests.csproj -c Release -- --native
-      - run: dotnet run --project tests/ProxyDesk.ServiceTests/ProxyDesk.ServiceTests.csproj -c Release -- --native
+        run: ./scripts/test-network-dns.ps1

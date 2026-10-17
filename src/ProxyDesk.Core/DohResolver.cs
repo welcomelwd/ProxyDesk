@@ -8,17 +8,15 @@ public sealed class DohResolver
     private readonly ConcurrentDictionary<string, (DateTimeOffset StoredAt, DateTimeOffset Expiry, byte[] Response)> cache = new();
 
     public async Task<byte[]> ResolveAsync(byte[] query, int pid, Guid profileId, ProxyServer proxy,
-        string password, Settings settings, CancellationToken token, string processIdentity = "", uint queryOptions = 0)
+        string password, Settings settings, CancellationToken token, string processIdentity = "")
     {
         if (query.Length is < 12 or > 65535) throw new InvalidDataException("Invalid DNS message length.");
         var key = $"{pid}:{processIdentity}:{profileId}:{proxy.Id}:{proxy.Revision}:{Convert.ToHexString(query.AsSpan(2))}";
-        var bypassCache = (queryOptions & (0x8 | 0x100)) != 0;
-        if (!bypassCache && cache.TryGetValue(key, out var entry) && entry.Expiry > DateTimeOffset.UtcNow)
+        if (cache.TryGetValue(key, out var entry) && entry.Expiry > DateTimeOffset.UtcNow)
         {
             var cached = (byte[])entry.Response.Clone(); cached[0] = query[0]; cached[1] = query[1];
             DnsWire.AgeAnswerTtls(cached, (uint)(DateTimeOffset.UtcNow - entry.StoredAt).TotalSeconds); return cached;
         }
-        if ((queryOptions & 0x10) != 0) throw new DnsCacheMissException();
         using var client = ProxyTunnel.CreateHttpClient(proxy, password, settings.DohBootstrapIp);
         using var content = new ByteArrayContent(query);
         content.Headers.ContentType = new MediaTypeHeaderValue("application/dns-message");
@@ -42,11 +40,6 @@ public sealed class DohResolver
         return wire;
     }
     public void Clear() => cache.Clear();
-}
-
-public sealed class DnsCacheMissException : Exception
-{
-    public DnsCacheMissException() : base("No application DNS cache entry is available.") { }
 }
 
 public static class DnsWire

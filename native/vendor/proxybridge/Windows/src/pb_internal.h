@@ -267,6 +267,7 @@ DWORD sockmap_lookup_tcp(BOOL ipv6, const void *src_ip, UINT16 port);   // 0 = u
 void  sockmap_note_scan(void);
 DWORD get_process_id_from_connection(UINT32 src_ip, UINT16 src_port);
 DWORD get_process_id_from_udp_connection(UINT32 src_ip, UINT16 src_port);
+DWORD get_tracked_tcp_pid(UINT16 src_port, BOOL is_ipv6);
 DWORD get_process_id_from_connection_v6(const UINT8 src_ip6[16], UINT16 src_port);
 DWORD get_process_id_from_udp_connection_v6(const UINT8 src_ip6[16], UINT16 src_port);
 BOOL get_process_name_from_pid(DWORD pid, char *name, DWORD name_size);

@@ -18,7 +18,6 @@ public sealed record RpcResponse(bool Success, JsonElement Payload, string? Erro
 public sealed record ConfigurationUpdate(AppConfiguration Configuration, Dictionary<Guid, string> Passwords);
 public sealed record ToggleRequest(bool Value);
 public sealed record ProxyTestRequest(Guid ProxyId);
-public sealed record ManagedRegistration(int Pid, string Path);
 public sealed record ShutdownRequest(int ExpectedProcessId);
 
 public static class FrameProtocol

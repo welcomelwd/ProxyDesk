@@ -192,6 +192,12 @@ int main(void)
     }
     PROCESS_IDENTITY owner;
     check(get_process_identity(GetCurrentProcessId(), &owner), "UDP cache captures a real process creation time");
+    add_connection(test_port, FALSE, test_address, htonl(0xc0000235), 53, 777, &owner);
+    check(get_tracked_tcp_pid(test_port, FALSE) == owner.pid,
+        "TCP DNS retains the original owner after packet redirection changes the peer address");
+    PROCESS_IDENTITY stale_tcp = owner; stale_tcp.created--;
+    add_connection(test_port, FALSE, test_address, htonl(0xc0000235), 53, 777, &stale_tcp);
+    check(get_tracked_tcp_pid(test_port, FALSE) == 0, "TCP DNS rejects a recycled process identity");
     UINT32 destination = htonl(0xcb007101), changed_destination = htonl(0xcb007102);
     UINT8 source6[16] = {0}, destination6[16] = {0}; source6[15] = 1; destination6[0] = 0x20; destination6[15] = 7;
     for (int ipv6 = 0; ipv6 <= 1; ipv6++) {

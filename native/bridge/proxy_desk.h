@@ -10,7 +10,9 @@ extern PdPolicyCallback pd_policy_callback;
 extern PdDnsCallback pd_dns_callback;
 int pd_handle_dns_packet(void *packet, uint32_t length, void *address);
 int pd_tcp_dns(uintptr_t socket_handle, uint32_t pid);
+void pd_dns_start(void);
+void pd_dns_stop(void);
 
 __declspec(dllexport) void __cdecl ProxyDesk_SetPolicyCallback(PdPolicyCallback callback);
 __declspec(dllexport) void __cdecl ProxyDesk_SetDnsCallback(PdDnsCallback callback);
-__declspec(dllexport) int __cdecl ProxyDesk_SetDnsBypass(int enabled);
+__declspec(dllexport) int __cdecl ProxyDesk_DisableLegacyDns(void);

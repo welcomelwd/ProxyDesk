@@ -7,7 +7,6 @@
 | .NET | SDK 10.0.402 / Runtime 10.0.13 | 运行时和标准库 | MIT 及其第三方说明 |
 | System.Management / System.CodeDom | 10.0.0 | Windows 进程和脚本入口识别 | MIT |
 | ProxyBridge | `d697164b836f0d3f897128774d3cb72e54770e74` | Windows 转发内核 | MIT |
-| Microsoft Detours | 4.0.1 | 托管启动与 DNS API 拦截 | MIT |
 | WinDivert | 2.2.2-A | WFP 网络驱动和接口 | LGPLv3 或其发行版提供的其他授权选项 |
 | SkiaSharp | 3.119.4 | 界面绘制及原生图形依赖 | MIT 及包内第三方说明 |
 | HarfBuzzSharp | 8.3.1.3 | 文字排版 | MIT 及包内第三方说明 |
@@ -20,7 +19,6 @@
 
 - [Avalonia](https://github.com/AvaloniaUI/Avalonia)
 - [ProxyBridge](https://github.com/InterceptSuite/ProxyBridge)
-- [Microsoft Detours](https://github.com/microsoft/Detours)
 - [WinDivert](https://github.com/basil00/WinDivert)
 
 保留的原始许可证位于 `native/vendor` 和 `licenses`，发布目录包含对应副本及 .NET 第三方说明。Microsoft.Extensions 和 System.* 托管依赖使用 .NET 的许可证。WinDivert 使用独立动态库和未经修改的签名驱动；完整 Windows 包内置两者。WinDivert v2.2.2 的上游源码归档随发布包提供于 `licenses/WinDivert-source-v2.2.2.zip`，保留原始许可证。

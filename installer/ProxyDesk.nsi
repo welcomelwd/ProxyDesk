@@ -4,9 +4,9 @@ Unicode True
 !include "LogicLib.nsh"
 Name "ProxyDesk"
 !ifdef DRIVERLESS_PREVIEW
-OutFile "${OUTPUT_DIR}\ProxyDesk-Setup-0.1.2-x64-preview.exe"
+OutFile "${OUTPUT_DIR}\ProxyDesk-Setup-0.1.3-x64-preview.exe"
 !else
-OutFile "${OUTPUT_DIR}\ProxyDesk-Setup-0.1.2-x64.exe"
+OutFile "${OUTPUT_DIR}\ProxyDesk-Setup-0.1.3-x64.exe"
 !endif
 InstallDir "$PROGRAMFILES64\ProxyDesk"
 RequestExecutionLevel admin
@@ -41,6 +41,12 @@ Section "ProxyDesk"
   Pop $0
   Pop $1
   Sleep 1500
+  Delete /REBOOTOK "$INSTDIR\ProxyDeskDns32.dll"
+  Delete /REBOOTOK "$INSTDIR\ProxyDeskDns64.dll"
+  Delete /REBOOTOK "$INSTDIR\ProxyDesk.Injector32.exe"
+  Delete /REBOOTOK "$INSTDIR\ProxyDesk.Injector64.exe"
+  Delete /REBOOTOK "$INSTDIR\ProxyDesk.Launcher.exe"
+  Delete /REBOOTOK "$INSTDIR\licenses\Detours-MIT.txt"
   File /r "${PUBLISH_DIR}\*.*"
   nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value"'
   Pop $0
@@ -68,7 +74,7 @@ Section "ProxyDesk"
   CreateShortcut "$DESKTOP\ProxyDesk.lnk" "$INSTDIR\ProxyDesk.Desktop.exe"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ProxyDesk" "DisplayName" "ProxyDesk"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ProxyDesk" "DisplayVersion" "0.1.2"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ProxyDesk" "DisplayVersion" "0.1.3"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ProxyDesk" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'
 SectionEnd
 Section "Uninstall"

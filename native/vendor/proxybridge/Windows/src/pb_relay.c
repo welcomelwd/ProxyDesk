@@ -512,7 +512,7 @@ DWORD WINAPI local_proxy_server(LPVOID arg)
                 if (conn_config != NULL)
                 {
                     conn_config->client_socket = client_sock;
-                    conn_config->client_pid = get_process_id_from_connection(client_addr.sin_addr.s_addr, ntohs(client_addr.sin_port));
+                    conn_config->client_pid = get_tracked_tcp_pid(ntohs(client_addr.sin_port), FALSE);
                     conn_config->is_ipv6 = FALSE;
 
                     UINT16 client_port = ntohs(client_addr.sin_port);
@@ -542,7 +542,7 @@ DWORD WINAPI local_proxy_server(LPVOID arg)
                 if (conn_config != NULL)
                 {
                     conn_config->client_socket = client_sock6;
-                    conn_config->client_pid = get_process_id_from_connection_v6((UINT8 *)&client_addr6.sin6_addr, ntohs(client_addr6.sin6_port));
+                    conn_config->client_pid = get_tracked_tcp_pid(ntohs(client_addr6.sin6_port), TRUE);
                     conn_config->is_ipv6 = TRUE;
 
                     UINT16 client_port = ntohs(client_addr6.sin6_port);

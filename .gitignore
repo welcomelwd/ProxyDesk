@@ -12,7 +12,3 @@ artifacts/
 *.pdb
 *.zip
 docs/verification.md
-native/vendor/detours/lib.*/
-native/vendor/detours/bin.*/
-native/vendor/detours/src/obj.*/
-native/vendor/detours/include/

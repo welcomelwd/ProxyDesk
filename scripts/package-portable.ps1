@@ -1,10 +1,13 @@
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $publishDirectory = Join-Path $projectRoot 'artifacts/windows-x64'
-$packageName = 'ProxyDesk-Portable-0.1.2-x64'
+foreach ($name in @('ProxyDeskDns32.dll','ProxyDeskDns64.dll','ProxyDesk.Injector32.exe','ProxyDesk.Injector64.exe','ProxyDesk.Launcher.exe')) {
+    if (Test-Path -LiteralPath (Join-Path $publishDirectory $name)) { throw 'Publish the network-only build before packaging; legacy DNS components remain.' }
+}
+$packageName = 'ProxyDesk-Portable-0.1.3-x64'
 $stagingDirectory = Join-Path $projectRoot ('artifacts/portable-package/' + [Guid]::NewGuid().ToString('N'))
 $packageDirectory = Join-Path $stagingDirectory $packageName
-foreach ($name in @('ProxyDesk.Desktop.exe','ProxyDesk.Service.exe','ProxyDeskCore.dll','ProxyDeskDns32.dll','ProxyDeskDns64.dll','ProxyDesk.Injector32.exe','ProxyDesk.Injector64.exe','licenses/WinDivert-source-v2.2.2.zip')) {
+foreach ($name in @('ProxyDesk.Desktop.exe','ProxyDesk.Service.exe','ProxyDeskCore.dll','licenses/WinDivert-source-v2.2.2.zip')) {
     if (-not (Test-Path -LiteralPath (Join-Path $publishDirectory $name))) { throw ('Missing portable input: ' + $name) }
 }
 $driverHashes = @{
@@ -17,7 +20,7 @@ foreach ($name in $driverHashes.Keys) {
 if ((Get-AuthenticodeSignature (Join-Path $publishDirectory 'WinDivert64.sys')).Status -ne 'Valid') { throw 'The bundled driver signature is not valid.' }
 New-Item -ItemType Directory -Path $packageDirectory -Force | Out-Null
 foreach ($file in Get-ChildItem -LiteralPath $publishDirectory -File -Recurse) {
-    if ($file.Extension -eq '.pdb' -or $file.Name -in @('run-preview.cmd','ProxyDesk.Launcher.exe','ProxyDesk.Desktop.exe','README.md')) { continue }
+    if ($file.Extension -eq '.pdb' -or $file.Name -in @('run-preview.cmd','ProxyDesk.Desktop.exe','README.md')) { continue }
     $relative = [IO.Path]::GetRelativePath($publishDirectory, $file.FullName)
     $destination = [IO.Path]::GetFullPath((Join-Path $packageDirectory $relative))
     if (-not $destination.StartsWith($packageDirectory + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'A package input escaped the staging directory.' }

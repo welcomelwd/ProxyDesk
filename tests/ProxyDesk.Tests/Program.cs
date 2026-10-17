@@ -1,6 +1,4 @@
 using System.Buffers.Binary;
-using System.Diagnostics;
-using System.IO.Pipes;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -120,69 +118,8 @@ await using (var second = new ProxyFixture(false))
     Check(second.ConnectRequests == 1, "DNS caches and traffic are isolated by proxy exit");
     await resolver.ResolveAsync(dnsQuery, 100, Guid.NewGuid(), firstProxy, "", settings, CancellationToken.None);
     Check(first.ConnectRequests == 3, "DNS caches are isolated by profile");
-    await resolver.ResolveAsync(dnsQuery, 100, profileId, firstProxy, "", settings, CancellationToken.None, queryOptions: 8);
-    Check(first.ConnectRequests == 4, "DNS_QUERY_BYPASS_CACHE performs a fresh proxy request");
-    try { await resolver.ResolveAsync(dnsQuery, 999, profileId, firstProxy, "", settings, CancellationToken.None, queryOptions: 16); throw new Exception("Cache-only queries must not use the network."); }
-    catch (DnsCacheMissException) { Check(first.ConnectRequests == 4, "DNS_QUERY_NO_WIRE_QUERY never performs a network request"); }
     var aged = DnsFixture.Answer(dnsQuery); DnsWire.AgeAnswerTtls(aged, 15);
     Check(DnsWire.MinimumAnswerTtl(aged) == 45, "Cached DNS TTLs decrease instead of being extended");
-}
-if (args.Length > 0 && args[0] == "--native")
-{
-    using var bypass = new EventWaitHandle(false, EventResetMode.ManualReset, @"Global\ProxyDesk.Dns.Tests.Bypass.v1");
-    bypass.Reset();
-    var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
-    using (var processTests = Process.Start(new ProcessStartInfo(Path.Combine(root, "artifacts/native-tests/ProxyDesk.ProcessTests.exe"))
-        { UseShellExecute = false, CreateNoWindow = true })!)
-    {
-        await processTests.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
-        Check(processTests.ExitCode == 0, "Native process lookup handles UDP port reuse and concurrent owner tables");
-    }
-    await using var server = new DnsFixture();
-    using var stop = new CancellationTokenSource(); var serverTask = server.RunAsync(stop.Token);
-    var launcher = Path.Combine(root, "artifacts/native-tests/ProxyDesk.Launcher.exe");
-    foreach (var architecture in new[] { "64", "32" })
-    {
-        var output = Path.Combine(root, "artifacts", "dns-probe-" + architecture + "-" + Guid.NewGuid().ToString("N") + ".txt");
-        var start = new ProcessStartInfo(launcher) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true };
-        var probe = Path.Combine(root, "artifacts/native-tests/ProxyDesk.DnsProbe" + architecture + ".exe");
-        start.ArgumentList.Add(probe); start.ArgumentList.Add("\"" + output + "\"");
-        using var process = Process.Start(start)!; await process.WaitForExitAsync();
-        Check(process.ExitCode == 0, "Managed launch succeeds for x" + architecture);
-        for (var i = 0; i < 100 && !File.Exists(output + ".done"); i++) await Task.Delay(100);
-        var result = File.ReadAllText(output); Console.WriteLine(result);
-        Check(File.Exists(output + ".done") && result.Contains("NATIVE_DNS_PASS"), "Native DNS APIs, cancellation and child loading pass for x" + architecture);
-        var attachedOutput = output + ".attached";
-        var normal = new ProcessStartInfo(probe) { UseShellExecute = false, CreateNoWindow = true };
-        normal.ArgumentList.Add(attachedOutput); normal.ArgumentList.Add("--wait-for-dns");
-        using var application = Process.Start(normal)!;
-        for (var i = 0; i < 100 && !File.Exists(attachedOutput + ".ready"); i++) await Task.Delay(20);
-        var injector = new ProcessStartInfo(Path.Combine(root, "artifacts/native-tests/ProxyDesk.Injector" + architecture + ".exe"))
-        { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true };
-        injector.ArgumentList.Add(application.Id.ToString());
-        injector.ArgumentList.Add((application.StartTime.ToUniversalTime().ToFileTimeUtc() + 1).ToString());
-        using (var stale = Process.Start(injector)!) {
-            await stale.WaitForExitAsync();
-            Check(stale.ExitCode != 0 && !application.HasExited, "Automatic DNS rejects a stale process identity for x" + architecture);
-        }
-        injector.ArgumentList[1] = application.StartTime.ToUniversalTime().ToFileTimeUtc().ToString();
-        for (var attempt = 0; attempt < 2; attempt++) {
-            using var attach = Process.Start(injector)!;
-            var attachError = await attach.StandardError.ReadToEndAsync(); await attach.WaitForExitAsync();
-            Check(attach.ExitCode == 0, "Runtime DNS attachment is successful and idempotent for x" + architecture + ": " + attachError);
-        }
-        await File.WriteAllTextAsync(attachedOutput + ".run", "run");
-        await application.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
-        var attachedResult = await File.ReadAllTextAsync(attachedOutput); Console.WriteLine(attachedResult);
-        Check(application.ExitCode == 0 && attachedResult.Contains("NATIVE_DNS_PASS"), "Normally started x" + architecture + " applications use DNS interception and pass child/API checks");
-        var stoppedOutput = output + ".stopped";
-        var stoppedStart = new ProcessStartInfo(launcher) { UseShellExecute = false, CreateNoWindow = true };
-        stoppedStart.ArgumentList.Add(probe); stoppedStart.ArgumentList.Add("\"" + stoppedOutput + "\" --stopped-dns");
-        using var stopped = Process.Start(stoppedStart)!; await stopped.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
-        for (var index = 0; index < 150 && !File.Exists(stoppedOutput + ".done"); index++) await Task.Delay(100);
-        Check(stopped.ExitCode == 0 && File.Exists(stoppedOutput + ".done") && File.ReadAllText(stoppedOutput).Contains("STOPPED_DNS_PASS"), "Explicit stop restores system DNS for x" + architecture);
-    }
-    stop.Cancel(); try { await serverTask; } catch (OperationCanceledException) { }
 }
 Console.WriteLine($"TEST_PASS: {count} checks");
 
@@ -257,40 +194,8 @@ sealed class ProxyFixture : IAsyncDisposable
     public async ValueTask DisposeAsync() { cancellation.Cancel(); listener.Stop(); await accept; cancellation.Dispose(); }
 }
 
-sealed class DnsFixture : IAsyncDisposable
+static class DnsFixture
 {
-    public async Task RunAsync(CancellationToken token)
-    {
-        while (!token.IsCancellationRequested)
-        {
-            var pipe = new NamedPipeServerStream("ProxyDesk.Dns.Tests.v1", PipeDirection.InOut, 32, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-            try {
-                await pipe.WaitForConnectionAsync(token); _ = ReplyAsync(pipe, token);
-                // Exercise the busy interval while the broker creates its next pipe instance.
-                await Task.Delay(2, token);
-            }
-            catch { pipe.Dispose(); throw; }
-        }
-    }
-    private static async Task ReplyAsync(NamedPipeServerStream pipe, CancellationToken token)
-    {
-        await using (pipe)
-        {
-            try
-            {
-                var header = new byte[12]; await pipe.ReadExactlyAsync(header, token); var length = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(8));
-                var query = new byte[length]; if (length > 0) await pipe.ReadExactlyAsync(query, token);
-                var operation = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(4));
-                if (operation is 2 or 5) query = [];
-                else if (operation == 4) query = query[4..];
-                if (query.Length > 0 && DnsWire.QuestionName(query).StartsWith("cancel")) await Task.Delay(500, token);
-                var response = query.Length > 0 ? Answer(query) : [];
-                var reply = new byte[8]; BinaryPrimitives.WriteInt32LittleEndian(reply.AsSpan(4), response.Length);
-                await pipe.WriteAsync(reply, token); await pipe.WriteAsync(response, token);
-            }
-            catch (Exception error) when (error is IOException or OperationCanceledException) { }
-        }
-    }
     public static byte[] Answer(byte[] query)
     {
         var typePosition = 12;
@@ -303,5 +208,4 @@ sealed class DnsFixture : IAsyncDisposable
         byte[] data = type == 28 ? IPAddress.Parse("2001:db8::1").GetAddressBytes() : type == 16 ? new byte[] { 2, (byte)'o', (byte)'k' } : new byte[] { 203, 0, 113, 7 };
         response.AddRange(new byte[] { 0, (byte)data.Length }); response.AddRange(data); return response.ToArray();
     }
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

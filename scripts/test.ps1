@@ -6,11 +6,10 @@ if (-not (Test-Path -LiteralPath $dotnetExe)) { $dotnetExe = (Get-Command dotnet
 Push-Location $projectRoot
 try {
     $arguments = @('run','--project','tests/ProxyDesk.Tests/ProxyDesk.Tests.csproj','-c','Release')
-    if ($Native) { & "$PSScriptRoot/build-native.ps1" -DnsTests; $arguments += @('--','--native') }
     & $dotnetExe @arguments
-    if ($LASTEXITCODE -ne 0) { throw 'Core or native DNS tests failed.' }
+    if ($LASTEXITCODE -ne 0) { throw 'Core tests failed.' }
     $serviceArguments = @('run','--project','tests/ProxyDesk.ServiceTests/ProxyDesk.ServiceTests.csproj','-c','Release')
-    if ($Native) { $serviceArguments += @('--','--native') }
     & $dotnetExe @serviceArguments
     if ($LASTEXITCODE -ne 0) { throw 'Service tests failed.' }
+    if ($Native) { & "$PSScriptRoot/test-network-dns.ps1" }
 } finally { Pop-Location }

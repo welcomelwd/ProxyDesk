@@ -54,8 +54,6 @@ Check(shortcutTarget.Path == scriptPath && shortcutTarget.Kind == SelectorKind.S
 var catalog = new WindowsProcessCatalog(); catalog.Refresh();
 Check(catalog.GetLineage(Environment.ProcessId, Environment.ProcessPath!)[0].ExecutablePath.Equals(Environment.ProcessPath!, StringComparison.OrdinalIgnoreCase),
     "The process catalog identifies the current process with WMI and a stable creation time");
-try { catalog.RegisterChild(Environment.ProcessId, Environment.ProcessId, Process.GetCurrentProcess().StartTime.ToUniversalTime().ToFileTimeUtc()); throw new Exception("An unrelated child report was accepted."); }
-catch (InvalidDataException) { Check(true, "A process cannot report an unrelated process as its child"); }
 var elevation = WindowsNetworkSetup.CreateElevationStartInfo(@"C:\Program Files\ProxyDesk\ProxyDesk.Service.exe", spacedRequest);
 Check(elevation.UseShellExecute && elevation.Verb == "runas" && elevation.WindowStyle == System.Diagnostics.ProcessWindowStyle.Hidden &&
     elevation.ArgumentList.SequenceEqual(new[] { "--prepare-network", spacedRequest }), "Administrator launch uses UAC and preserves the request path as a separate argument");
@@ -119,5 +117,6 @@ using (var engine = new EngineService(options))
     var store = new ConfigurationStore(options);
     Check(store.GetPassword(proxy.Id) == "fixture-secret-unique", "DPAPI credentials can be recovered by the service");
 }
-if (args.Contains("--native")) await DescendantDnsTests.RunAsync(repository, Check);
+await DnsLogTests.RunAsync(root, Check);
+await NetworkDnsTests.RunAsync(root, Check);
 Console.WriteLine($"SERVICE_TEST_PASS: {count} checks");
