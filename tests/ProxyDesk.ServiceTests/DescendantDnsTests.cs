@@ -45,6 +45,7 @@ static class DescendantDnsTests
             await WaitFile(output + ".ready");
             var pid = int.Parse(await File.ReadAllTextAsync(output + ".ready"));
             using var child = Process.GetProcessById(pid);
+            _ = child.Handle;
             var lineage = catalog.GetLineage(pid, helperPath);
             var decision = RuleEngine.Evaluate(broker.Configuration, lineage, AppPlatform.Windows);
             Check(decision.Action == expected, name + " routing action is " + expected);
@@ -160,7 +161,11 @@ static class DescendantDnsTests
                 try
                 {
                     if (!GetNamedPipeClientProcessId(pipe.SafePipeHandle.DangerousGetHandle(), out var pid)) throw new IOException("Cannot identify audit client.");
-                    var header = new byte[12]; await pipe.ReadExactlyAsync(header, token);
+                    var header = new byte[12];
+                    var received = await pipe.ReadAsync(header, token);
+                    // A startup notifier can exit after connecting without sending a request.
+                    if (received == 0) return;
+                    await pipe.ReadExactlyAsync(header.AsMemory(received), token);
                     var operation = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(4));
                     var payload = new byte[BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(8))];
                     if (payload.Length > 0) await pipe.ReadExactlyAsync(payload, token);
