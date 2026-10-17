@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $publishDirectory = Join-Path $projectRoot 'artifacts/windows-x64'
-$packageName = 'ProxyDesk-Portable-0.1.1-x64'
+$packageName = 'ProxyDesk-Portable-0.1.2-x64'
 $stagingDirectory = Join-Path $projectRoot ('artifacts/portable-package/' + [Guid]::NewGuid().ToString('N'))
 $packageDirectory = Join-Path $stagingDirectory $packageName
 foreach ($name in @('ProxyDesk.Desktop.exe','ProxyDesk.Service.exe','ProxyDeskCore.dll','ProxyDeskDns32.dll','ProxyDeskDns64.dll','ProxyDesk.Injector32.exe','ProxyDesk.Injector64.exe','licenses/WinDivert-source-v2.2.2.zip')) {

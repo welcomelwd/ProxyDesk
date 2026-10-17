@@ -4,9 +4,9 @@ Unicode True
 !include "LogicLib.nsh"
 Name "ProxyDesk"
 !ifdef DRIVERLESS_PREVIEW
-OutFile "${OUTPUT_DIR}\ProxyDesk-Setup-0.1.1-x64-preview.exe"
+OutFile "${OUTPUT_DIR}\ProxyDesk-Setup-0.1.2-x64-preview.exe"
 !else
-OutFile "${OUTPUT_DIR}\ProxyDesk-Setup-0.1.1-x64.exe"
+OutFile "${OUTPUT_DIR}\ProxyDesk-Setup-0.1.2-x64.exe"
 !endif
 InstallDir "$PROGRAMFILES64\ProxyDesk"
 RequestExecutionLevel admin
@@ -68,7 +68,7 @@ Section "ProxyDesk"
   CreateShortcut "$DESKTOP\ProxyDesk.lnk" "$INSTDIR\ProxyDesk.Desktop.exe"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ProxyDesk" "DisplayName" "ProxyDesk"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ProxyDesk" "DisplayVersion" "0.1.1"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ProxyDesk" "DisplayVersion" "0.1.2"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ProxyDesk" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'
 SectionEnd
 Section "Uninstall"

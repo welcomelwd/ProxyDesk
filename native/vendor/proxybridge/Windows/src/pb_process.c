@@ -71,7 +71,7 @@ DWORD get_process_id_from_connection(UINT32 src_ip, UINT16 src_port)
     if (cached_pid != 0)
         return cached_pid;
 
-    DWORD pid = sockmap_lookup_tcp(src_port);
+    DWORD pid = sockmap_lookup_tcp(FALSE, &src_ip, src_port);
     if (pid != 0)
     {
         cache_pid(src_ip, src_port, pid, FALSE);
@@ -165,7 +165,7 @@ DWORD get_process_id_from_udp_connection(UINT32 src_ip, UINT16 src_port)
 
 DWORD get_process_id_from_connection_v6(const UINT8 src_ip6[16], UINT16 src_port)
 {
-    DWORD pid = sockmap_lookup_tcp(src_port);
+    DWORD pid = sockmap_lookup_tcp(TRUE, src_ip6, src_port);
     if (pid != 0) return pid;
     sockmap_note_scan();
 

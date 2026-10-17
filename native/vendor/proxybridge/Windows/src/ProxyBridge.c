@@ -57,7 +57,7 @@ SRWLOCK             g_dns_cache_lock;
 // On a sustained 300 Mbps download (17 000 packets/sec) that is thousands of
 // kernel calls per second, saturating a single core.
 //
-// Layout: two 2048-LONG bitmaps, 8 KB each.
+// Keep independent decision bitmaps for IPv4 and IPv6; both can use the same port.
 //   port_decided_bitmap : bit set = decision is cached for this port
 //   port_direct_bitmap  : bit set = decision was DIRECT (bit clear = PROXY/BLOCK)
 // Together they encode three states per port:
@@ -67,8 +67,8 @@ SRWLOCK             g_dns_cache_lock;
 //
 // Thread safety: InterlockedOr/And for writes; plain aligned 32-bit read for
 // reads (x86/x64 aligned read is atomic; we only need visibility, not ordering).
-volatile LONG port_decided_bitmap[2048] = {0};  // 8 KB
-volatile LONG port_direct_bitmap[2048]  = {0};  // 8 KB
+volatile LONG port_decided_bitmap[2][2048] = {0};
+volatile LONG port_direct_bitmap[2][2048]  = {0};
 
 UINT16 g_local_relay_port = LOCAL_PROXY_PORT;
 BOOL g_localhost_via_proxy = FALSE;  // default disabled for security - most proxy server block localhost for ssrf and also many app might not work if localhost trafic goes to remote server if proxy server is on diffrent machine
@@ -127,10 +127,10 @@ static BOOL is_proxy_udp_endpoint(UINT32 ip, UINT16 port_host)
 static void reset_stale_tcp_state(UINT16 sp, BOOL is_ipv6)
 {
     if (sp == g_local_relay_port) return;   // never our own relay's port
-    if (port_is_decided(sp) || is_connection_tracked(sp, FALSE, is_ipv6))
+    if (port_is_decided(sp, is_ipv6) || is_connection_tracked(sp, FALSE, is_ipv6))
     {
         remove_connection(sp, FALSE, is_ipv6);
-        port_clear(sp);
+        port_clear(sp, is_ipv6);
     }
 }
 
@@ -384,10 +384,10 @@ DWORD WINAPI packet_processor(LPVOID arg)
                 if (tcp_header->Syn && !tcp_header->Ack)
                     reset_stale_tcp_state(sp, TRUE);
 
-                if (port_is_decided(sp))
+                if (port_is_decided(sp, TRUE))
                 {
-                    BOOL was_direct = port_is_direct(sp);   // see the IPv4 path: clear on FIN/RST, then send untouched
-                    if (tcp_header->Fin || tcp_header->Rst) port_clear(sp);
+                    BOOL was_direct = port_is_direct(sp, TRUE);   // see the IPv4 path: clear on FIN/RST, then send untouched
+                    if (tcp_header->Fin || tcp_header->Rst) port_clear(sp, TRUE);
                     if (was_direct)
                     {
                         WinDivertSend(windivert_handle, packet, packet_len, NULL, &addr);
@@ -423,7 +423,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
 
                 if (is_connection_tracked(sp, FALSE, TRUE))
                 {
-                    if (tcp_header->Rst) { remove_connection(sp, FALSE, TRUE); port_clear(sp); }
+                    if (tcp_header->Rst) { remove_connection(sp, FALSE, TRUE); port_clear(sp, TRUE); }
                     else if (tcp_header->Fin) connection_fin(sp, TRUE, 1);
                     tcp_header->DstPort = htons(g_local_relay_port);
 
@@ -522,19 +522,19 @@ DWORD WINAPI packet_processor(LPVOID arg)
 
                 if (action6 == RULE_ACTION_DIRECT)
                 {
-                    port_set_direct(sp);
+                    port_set_direct(sp, TRUE);
                     WinDivertSend(windivert_handle, packet, packet_len, NULL, &addr);
                     continue;
                 }
                 else if (action6 == RULE_ACTION_BLOCK)
                 {
-                    port_set_decided(sp);
+                    port_set_decided(sp, TRUE);
                     continue;
                 }
                 else if (action6 == RULE_ACTION_PROXY)
                 {
                     add_connection_v6(sp, FALSE, (const UINT8*)ipv6_header->SrcAddr, (const UINT8*)ipv6_header->DstAddr, dp, proxy_config_id6, NULL);
-                    port_set_decided(sp);
+                    port_set_decided(sp, TRUE);
                     tcp_header->DstPort = htons(g_local_relay_port);
 
                     static const UINT8 _lb6p[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
@@ -816,14 +816,14 @@ DWORD WINAPI packet_processor(LPVOID arg)
                     reset_stale_tcp_state(sp, FALSE);
                 }
 
-                if (port_is_decided(sp))
+                if (port_is_decided(sp, FALSE))
                 {
                     // A FIN/RST on a DIRECT flow ends that decision: clear it and send the packet
                     // untouched. (Clearing first and then testing "is it direct?" used to fall through
                     // to a fresh rule lookup that cached DIRECT again, so teardown never evicted anything.)
-                    BOOL was_direct = port_is_direct(sp);
+                    BOOL was_direct = port_is_direct(sp, FALSE);
                     if (tcp_header->Fin || tcp_header->Rst)
-                        port_clear(sp);
+                        port_clear(sp, FALSE);
                     if (was_direct)
                     {
                         WinDivertSend(windivert_handle, packet, packet_len, NULL, &addr);
@@ -868,7 +868,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
                 if (tcp_header->Rst)
                 {
                     remove_connection(src_port, FALSE, FALSE);
-                    port_clear(src_port);
+                    port_clear(src_port, FALSE);
                 }
                 else if (tcp_header->Fin)
                     connection_fin(src_port, FALSE, 1);
@@ -973,14 +973,14 @@ DWORD WINAPI packet_processor(LPVOID arg)
                 {
                     // Cache this decision so all subsequent packets from this port
                     // fast-path at the top of the outbound branch (zero kernel calls).
-                    port_set_direct(src_port);
+                    port_set_direct(src_port, FALSE);
                     // Unmodified packet no checksum needed
                     WinDivertSend(windivert_handle, packet, packet_len, NULL, &addr);
                     continue;
                 }
                 else if (action == RULE_ACTION_BLOCK)
                 {
-                    port_set_decided(src_port);  // mark decided (not direct) so we don't re-run rule check
+                    port_set_decided(src_port, FALSE);  // mark decided (not direct) so we don't re-run rule check
                     // Drop the packet - don't send it anywhere
                     continue;
                 }
@@ -990,7 +990,7 @@ DWORD WINAPI packet_processor(LPVOID arg)
                 // Mark this port as decided (not direct) so subsequent packets from
                 // the same source port skip the rule check.  The is_connection_tracked
                 // branch above handles the actual per-packet redirect.
-                port_set_decided(src_port);
+                port_set_decided(src_port, FALSE);
 
                 tcp_header->DstPort = htons(g_local_relay_port);
 

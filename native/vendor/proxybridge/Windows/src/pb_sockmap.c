@@ -16,8 +16,9 @@
 
 #define SOCKMAP_FRESH_MS 8000   // a SYN is evaluated within ~2 s even when the capture queue is backed up
 
-typedef struct { volatile LONG pid; volatile LONG tick; } SOCKMAP_ENTRY;
-static SOCKMAP_ENTRY g_sockmap[65536];
+typedef struct { DWORD pid, tick; UINT64 endpoint; UINT32 local_addr[4]; } SOCKMAP_ENTRY;
+static SOCKMAP_ENTRY g_sockmap[2][65536];
+static SRWLOCK g_sockmap_lock = SRWLOCK_INIT;
 static HANDLE g_sock_handle = INVALID_HANDLE_VALUE;
 static HANDLE g_sock_thread = NULL;
 static volatile LONG g_sock_events = 0, g_sock_hits = 0, g_sock_scans = 0;
@@ -36,14 +37,22 @@ static DWORD WINAPI sockmap_thread(LPVOID arg)
             Sleep(5);
             continue;
         }
-        if (addr.Event == WINDIVERT_EVENT_SOCKET_CONNECT && addr.Socket.Protocol == IPPROTO_TCP &&
+        if ((addr.Event == WINDIVERT_EVENT_SOCKET_CONNECT || addr.Event == WINDIVERT_EVENT_SOCKET_CLOSE) && addr.Socket.Protocol == IPPROTO_TCP &&
             addr.Socket.LocalPort != 0 && addr.Socket.ProcessId != 0)
         {
-            SOCKMAP_ENTRY *e = &g_sockmap[addr.Socket.LocalPort];
-            InterlockedExchange(&e->tick, 0);                       // invalidate while updating
-            InterlockedExchange(&e->pid, (LONG)addr.Socket.ProcessId);
-            LONG t = (LONG)GetTickCount(); if (t == 0) t = 1;
-            InterlockedExchange(&e->tick, t);
+            AcquireSRWLockExclusive(&g_sockmap_lock);
+            SOCKMAP_ENTRY *e = &g_sockmap[addr.IPv6 != 0][addr.Socket.LocalPort];
+            if (addr.Event == WINDIVERT_EVENT_SOCKET_CLOSE)
+            {
+                // A late close from an older socket must not invalidate its replacement.
+                if (e->endpoint == addr.Socket.EndpointId) e->pid = 0;
+                ReleaseSRWLockExclusive(&g_sockmap_lock);
+                continue;
+            }
+            e->pid = addr.Socket.ProcessId; e->tick = GetTickCount();
+            e->endpoint = addr.Socket.EndpointId;
+            memcpy(e->local_addr, addr.Socket.LocalAddr, sizeof(e->local_addr));
+            ReleaseSRWLockExclusive(&g_sockmap_lock);
             if (InterlockedIncrement(&g_sock_events) == 1)
                 log_message("Process lookup: socket events active (first: PID %lu, local port %u)",
                             (unsigned long)addr.Socket.ProcessId, (unsigned)addr.Socket.LocalPort);
@@ -56,7 +65,7 @@ BOOL sockmap_start(void)
 {
     ZeroMemory(g_sockmap, sizeof(g_sockmap));
     g_sock_events = g_sock_hits = g_sock_scans = 0;
-    g_sock_handle = WinDivertOpen("event == CONNECT", WINDIVERT_LAYER_SOCKET, 0,
+    g_sock_handle = WinDivertOpen("tcp and (event == CONNECT or event == CLOSE)", WINDIVERT_LAYER_SOCKET, 0,
                                   WINDIVERT_FLAG_SNIFF | WINDIVERT_FLAG_RECV_ONLY);
     if (g_sock_handle == INVALID_HANDLE_VALUE)
     {
@@ -92,21 +101,26 @@ void sockmap_stop(void)
     }
 }
 
-// PID that connect()ed from this local port in the last SOCKMAP_FRESH_MS, or 0 (use the table).
-DWORD sockmap_lookup_tcp(UINT16 port)
+// Match the address family and local address as well as the port. Ports alone are not identities.
+DWORD sockmap_lookup_tcp(BOOL ipv6, const void *src_ip, UINT16 port)
 {
     if (g_sock_thread == NULL || port == 0)
         return 0;
-    SOCKMAP_ENTRY *e = &g_sockmap[port];
-    LONG t1 = e->tick;
-    LONG pid = e->pid;
-    LONG t2 = e->tick;
-    if (t1 == 0 || t1 != t2 || pid == 0)
-        return 0;
-    if ((LONG)((LONG)GetTickCount() - t1) > SOCKMAP_FRESH_MS)
+    UINT32 address[4] = {0};
+    if (ipv6)
+    {
+        UINT32 network[4]; memcpy(network, src_ip, sizeof(network));
+        for (int i = 0; i < 4; i++) address[i] = ntohl(network[3 - i]);
+    }
+    else { address[0] = ntohl(*(const UINT32 *)src_ip); address[1] = 0xffff; }
+    AcquireSRWLockShared(&g_sockmap_lock);
+    SOCKMAP_ENTRY entry = g_sockmap[ipv6 != 0][port];
+    ReleaseSRWLockShared(&g_sockmap_lock);
+    if (!entry.pid || (DWORD)(GetTickCount() - entry.tick) > SOCKMAP_FRESH_MS ||
+        memcmp(entry.local_addr, address, sizeof(address)) != 0)
         return 0;
     InterlockedIncrement(&g_sock_hits);
-    return (DWORD)pid;
+    return entry.pid;
 }
 
 void sockmap_note_scan(void)

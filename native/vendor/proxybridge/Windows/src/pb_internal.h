@@ -208,8 +208,8 @@ extern BOOL g_traffic_logging_enabled;
 extern DNS_CACHE_ENTRY    *g_dns_cache[DNS_CACHE_BUCKETS];
 extern DNS_CACHE_ENTRY_V6 *g_dns_cache_v6[DNS_CACHE_BUCKETS];
 extern SRWLOCK             g_dns_cache_lock;
-extern volatile LONG port_decided_bitmap[2048];  // 8 KB
-extern volatile LONG port_direct_bitmap[2048];  // 8 KB
+extern volatile LONG port_decided_bitmap[2][2048];
+extern volatile LONG port_direct_bitmap[2][2048];
 extern UINT16 g_local_relay_port;
 extern BOOL g_localhost_via_proxy;  // default disabled for security - most proxy server block localhost for ssrf and also many app might not work if localhost trafic goes to remote server if proxy server is on diffrent machine
 extern LogCallback g_log_callback;
@@ -218,28 +218,28 @@ extern char  *g_pidtbl_buf;
 extern DWORD  g_pidtbl_cap;
 
 // ---- per-source-port decision bitmaps: hot-path inline helpers ----
-static __forceinline BOOL port_is_decided(UINT16 p)
+static __forceinline BOOL port_is_decided(UINT16 p, BOOL ipv6)
 {
-    return (port_decided_bitmap[p >> 5] >> (p & 31)) & 1;
+    return (port_decided_bitmap[ipv6 != 0][p >> 5] >> (p & 31)) & 1;
 }
-static __forceinline BOOL port_is_direct(UINT16 p)
+static __forceinline BOOL port_is_direct(UINT16 p, BOOL ipv6)
 {
-    return (port_direct_bitmap[p >> 5] >> (p & 31)) & 1;
+    return (port_direct_bitmap[ipv6 != 0][p >> 5] >> (p & 31)) & 1;
 }
-static __forceinline void port_set_direct(UINT16 p)
+static __forceinline void port_set_direct(UINT16 p, BOOL ipv6)
 {
-    InterlockedOr(&port_decided_bitmap[p >> 5], (LONG)(1u << (p & 31)));
-    InterlockedOr(&port_direct_bitmap[p >> 5],  (LONG)(1u << (p & 31)));
+    InterlockedOr(&port_direct_bitmap[ipv6 != 0][p >> 5], (LONG)(1u << (p & 31)));
+    InterlockedOr(&port_decided_bitmap[ipv6 != 0][p >> 5], (LONG)(1u << (p & 31)));
 }
-static __forceinline void port_set_decided(UINT16 p)  // decided, but NOT direct (proxy/block)
+static __forceinline void port_set_decided(UINT16 p, BOOL ipv6)  // decided, but NOT direct (proxy/block)
 {
-    InterlockedOr(&port_decided_bitmap[p >> 5], (LONG)(1u << (p & 31)));
-    // leave port_direct_bitmap bit at 0
+    InterlockedAnd(&port_direct_bitmap[ipv6 != 0][p >> 5], (LONG)~(1u << (p & 31)));
+    InterlockedOr(&port_decided_bitmap[ipv6 != 0][p >> 5], (LONG)(1u << (p & 31)));
 }
-static __forceinline void port_clear(UINT16 p)
+static __forceinline void port_clear(UINT16 p, BOOL ipv6)
 {
-    InterlockedAnd(&port_decided_bitmap[p >> 5], (LONG)~(1u << (p & 31)));
-    InterlockedAnd(&port_direct_bitmap[p >> 5],  (LONG)~(1u << (p & 31)));
+    InterlockedAnd(&port_decided_bitmap[ipv6 != 0][p >> 5], (LONG)~(1u << (p & 31)));
+    InterlockedAnd(&port_direct_bitmap[ipv6 != 0][p >> 5], (LONG)~(1u << (p & 31)));
 }
 
 // ---- pb_util.c ----
@@ -263,7 +263,7 @@ void *pidtbl_reserve(DWORD need);
 // pb_sockmap.c - owner PID of new outbound TCP connections from WinDivert's SOCKET layer
 BOOL  sockmap_start(void);
 void  sockmap_stop(void);
-DWORD sockmap_lookup_tcp(UINT16 port);   // 0 = unknown, fall back to the table scan
+DWORD sockmap_lookup_tcp(BOOL ipv6, const void *src_ip, UINT16 port);   // 0 = unknown, fall back to the table scan
 void  sockmap_note_scan(void);
 DWORD get_process_id_from_connection(UINT32 src_ip, UINT16 src_port);
 DWORD get_process_id_from_udp_connection(UINT32 src_ip, UINT16 src_port);

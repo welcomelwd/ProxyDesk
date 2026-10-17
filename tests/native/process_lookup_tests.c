@@ -8,6 +8,9 @@ CONNECTION_INFO *connection_hash_table[CONNECTION_HASH_SIZE] = {0};
 CONNECTION_INFO *connection_rev_table[CONNECTION_HASH_SIZE] = {0};
 LOGGED_CONNECTION *logged_connections = NULL;
 int g_logged_count = 0;
+volatile BOOL running = FALSE;
+volatile LONG port_decided_bitmap[2][2048] = {0};
+volatile LONG port_direct_bitmap[2][2048] = {0};
 
 static const UINT16 test_port = 42053;
 static UINT32 test_address;
@@ -58,8 +61,47 @@ static DWORD WINAPI test_udp_table(PVOID buffer, PDWORD size, BOOL sorted, ULONG
     return NO_ERROR;
 }
 
-DWORD sockmap_lookup_tcp(UINT16 port) { (void)port; return 0; }
-void sockmap_note_scan(void) { }
+static WINDIVERT_ADDRESS socket_event;
+static BOOL socket_event_pending;
+static BOOL test_socket_receive(HANDLE handle, void *packet, UINT capacity, UINT *length, WINDIVERT_ADDRESS *address)
+{
+    (void)handle; (void)packet; (void)capacity; (void)length;
+    if (!socket_event_pending) { SetLastError(ERROR_NO_DATA); return FALSE; }
+    *address = socket_event; socket_event_pending = FALSE; return TRUE;
+}
+void log_message(const char *format, ...) { (void)format; }
+static HANDLE test_socket_open(const char *filter, WINDIVERT_LAYER layer, INT16 priority, UINT64 flags)
+{ (void)filter; (void)layer; (void)priority; (void)flags; abort(); return INVALID_HANDLE_VALUE; }
+static BOOL test_socket_shutdown(HANDLE handle, WINDIVERT_SHUTDOWN how)
+{ (void)handle; (void)how; abort(); return FALSE; }
+static BOOL test_socket_close(HANDLE handle)
+{ (void)handle; abort(); return FALSE; }
+static BOOL test_socket_param(HANDLE handle, WINDIVERT_PARAM param, UINT64 value)
+{ (void)handle; (void)param; (void)value; abort(); return FALSE; }
+#define WinDivertRecv test_socket_receive
+#define WinDivertOpen test_socket_open
+#define WinDivertShutdown test_socket_shutdown
+#define WinDivertClose test_socket_close
+#define WinDivertSetParam test_socket_param
+#include "../../native/vendor/proxybridge/Windows/src/pb_sockmap.c"
+#undef WinDivertRecv
+#undef WinDivertOpen
+#undef WinDivertShutdown
+#undef WinDivertClose
+#undef WinDivertSetParam
+
+static void record_socket_event(BOOL ipv6, UINT32 address, DWORD pid, UINT64 endpoint, WINDIVERT_EVENT event)
+{
+    memset(&socket_event, 0, sizeof(socket_event));
+    socket_event.Event = event; socket_event.IPv6 = ipv6;
+    socket_event.Socket.Protocol = IPPROTO_TCP;
+    socket_event.Socket.LocalPort = test_port; socket_event.Socket.ProcessId = pid;
+    socket_event.Socket.EndpointId = endpoint;
+    socket_event.Socket.LocalAddr[0] = ntohl(address);
+    socket_event.Socket.LocalAddr[1] = ipv6 ? 0 : 0xffff;
+    socket_event_pending = TRUE;
+    sockmap_thread(NULL);
+}
 
 #define GetExtendedTcpTable test_tcp_table
 #define GetExtendedUdpTable test_udp_table
@@ -105,6 +147,49 @@ int main(void)
         "Concurrent TCP and DNS lookups cannot overwrite each other's owner table");
     CloseHandle(thread); CloseHandle(tcp_written); CloseHandle(udp_written);
     interleave = FALSE;
+    g_sock_thread = (HANDLE)1;
+    clear_pid_cache();
+    record_socket_event(TRUE, test_address, 999, 1, WINDIVERT_EVENT_SOCKET_CONNECT);
+    check(get_process_id_from_connection(test_address, test_port) == 303,
+        "An IPv6 proxy connection cannot take ownership of an IPv4 direct connection on the same port");
+    clear_pid_cache();
+    record_socket_event(FALSE, htonl(0x7f000002), 999, 2, WINDIVERT_EVENT_SOCKET_CONNECT);
+    check(get_process_id_from_connection(test_address, test_port) == 303,
+        "A different local address cannot take ownership of a direct connection on the same port");
+    clear_pid_cache();
+    record_socket_event(FALSE, test_address, 999, 3, WINDIVERT_EVENT_SOCKET_CONNECT);
+    check(get_process_id_from_connection(test_address, test_port) == 999,
+        "A matching socket event still resolves its current owner");
+    clear_pid_cache();
+    record_socket_event(FALSE, test_address, 999, 3, WINDIVERT_EVENT_SOCKET_CLOSE);
+    check(get_process_id_from_connection(test_address, test_port) == 303,
+        "A closed socket cannot supply the previous owner's identity for a reused port");
+    clear_pid_cache();
+    record_socket_event(FALSE, test_address, 999, 4, WINDIVERT_EVENT_SOCKET_CONNECT);
+    record_socket_event(FALSE, test_address, 999, 3, WINDIVERT_EVENT_SOCKET_CLOSE);
+    check(get_process_id_from_connection(test_address, test_port) == 999,
+        "A delayed close does not erase the replacement socket's owner");
+    UINT8 tcp_source6[16]; InetPtonA(AF_INET6, "2001:db8::1234", tcp_source6);
+    socket_event.IPv6 = TRUE; socket_event.Event = WINDIVERT_EVENT_SOCKET_CONNECT;
+    socket_event.Socket.LocalAddr[0] = 0x1234; socket_event.Socket.LocalAddr[1] = 0;
+    socket_event.Socket.LocalAddr[2] = 0; socket_event.Socket.LocalAddr[3] = 0x20010db8;
+    socket_event_pending = TRUE; sockmap_thread(NULL);
+    check(get_process_id_from_connection_v6(tcp_source6, test_port) == 999,
+        "IPv6 socket event addresses match packet addresses in network byte order");
+    tcp_source6[15]++;
+    check(sockmap_lookup_tcp(TRUE, tcp_source6, test_port) == 0,
+        "A different IPv6 local address cannot reuse the cached socket owner");
+    g_sock_thread = NULL;
+    for (int ipv6 = 0; ipv6 <= 1; ipv6++) {
+        port_clear(test_port, FALSE); port_clear(test_port, TRUE);
+        port_set_direct(test_port, ipv6);
+        port_set_decided(test_port, !ipv6);
+        check(port_is_direct(test_port, ipv6) && !port_is_direct(test_port, !ipv6),
+            "Direct and proxy TCP decisions on the same port stay isolated by address family");
+        port_clear(test_port, !ipv6);
+        check(port_is_decided(test_port, ipv6) && port_is_direct(test_port, ipv6),
+            "Closing the other address family preserves an active direct TCP connection");
+    }
     PROCESS_IDENTITY owner;
     check(get_process_identity(GetCurrentProcessId(), &owner), "UDP cache captures a real process creation time");
     UINT32 destination = htonl(0xcb007101), changed_destination = htonl(0xcb007102);
