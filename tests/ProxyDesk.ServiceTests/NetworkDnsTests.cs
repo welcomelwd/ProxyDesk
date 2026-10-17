@@ -58,6 +58,13 @@ static class NetworkDnsTests
             foreach (var request in requests) { try { await request.WaitAsync(TimeSpan.FromSeconds(2)); throw new Exception("Stalled DNS was not cancelled."); } catch (OperationCanceledException) { } }
             check(stopped.Success && timer.ElapsedMilliseconds < 2000, "Stopping capture cancels in-flight proxy DNS instead of waiting for the upstream timeout");
         }
-        finally { foreach (var socket in sockets) socket.Dispose(); listener.Stop(); child.StandardInput.Close(); await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(3)); }
+        finally
+        {
+            foreach (var socket in sockets) socket.Dispose();
+            listener.Stop();
+            child.StandardInput.Close();
+            if (!child.HasExited) child.Kill();
+            await child.WaitForExitAsync();
+        }
     }
 }
